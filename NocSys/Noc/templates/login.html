@@ -1,0 +1,44 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login - NocSys</title>
+  <link rel="stylesheet" href="{% static 'css/login.css' %}" />
+</head>
+<body class="fade-zoom-in" style="background-color:#1e1e2f; color:#fff;">
+
+  <!-- Barra fixa no topo -->
+  <div class="top-bar fade-slide-down">
+    <div class="logo">NocSys</div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <!-- Caixa de login centralizada -->
+  <div class="login-box fade-zoom-in" id="login-box">
+    <h2 class="titlelogin">NocSys - Login</h2>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="{% url 'login' %}" id="login-form">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next|default_if_none:'' }}" />
+      <input type="text" name="username" placeholder="Usuário" required autocomplete="username" />
+      <input type="password" name="password" placeholder="Senha" required autocomplete="current-password" />
+      <button type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <script src="{% static 'home/js/clock.js' %}"></script>
+  <script>
+    // Animação de saída do login
+    const form = document.getElementById('login-form');
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.body.classList.add('fade-zoom-out');
+      setTimeout(() => form.submit(), 400);
+    });
+  </script>
+</body>
+</html>

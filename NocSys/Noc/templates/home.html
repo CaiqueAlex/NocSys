@@ -1,0 +1,50 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8" />
+    <title>NocSys | Home</title>
+    <link rel="stylesheet" href="{% static 'css/home.css' %}" />
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo">
+            <span class="logo-icon">🧠</span>
+            <span class="logo-text">NocSys</span>
+        </div>
+        <ul class="menu">
+            <li><a href="#" id="menu-dashboard">🏠 Dashboard</a></li>
+            <li><a href="#" id="menu-chamados">📁 Chamados</a></li>
+            <li><a href="#" id="menu-chamados-finalizados">📊 Chamados Finalizados</a></li>
+            <li><a href="#" id="menu-chamados-apagados">🗑️ Chamados Apagados</a></li>
+            <li><a href="#">⚙️ Configurações</a></li>
+            <li><a href="/logout/">🚪 Sair</a></li>
+        </ul>
+    </div>
+
+    <div class="content" id="content-area">
+        <h1>Bem-vindo ao NocSys</h1>
+        <p class="fade-in">Seu centro de controle de chamados internos.</p>
+    </div>
+
+    <script src="{% static 'js/chamados.js' %}"></script>
+    <script src="{% static 'js/chamados_finalizados.js' %}"></script>
+    <script src="{% static 'js/deleted.js' %}"></script>
+    <script>
+      document.getElementById("menu-chamados").addEventListener("click", function (e) {
+        e.preventDefault();
+        loadChamados();
+      });
+
+      document.getElementById("menu-chamados-finalizados").addEventListener("click", function (e) {
+        e.preventDefault();
+        loadChamadosFinalizados();
+      });
+
+      document.getElementById("menu-chamados-apagados").addEventListener("click", function (e) {
+        e.preventDefault();
+        loadDeleted();
+      });
+    </script>
+</body>
+</html>

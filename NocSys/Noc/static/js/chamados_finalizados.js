@@ -29,7 +29,7 @@ async function loadChamadosFinalizados() {
   `;
 
   try {
-    const res = await fetch('/api/whatsapp-slots/?finalizado=1&apagado=0');
+    const res = await fetch('/api/whatsapp-slots/?finalizado=1');
     if (!res.ok) throw new Error('Erro ao buscar chamados finalizados');
     const chamados = await res.json();
 
@@ -38,16 +38,14 @@ async function loadChamadosFinalizados() {
       return;
     }
 
-    // AGRUPA apenas por codigo_chamado válido (numérico, crescente, 1 por chamado!):
     const agrupado = {};
     chamados.forEach(c => {
-      if (!c.codigo_chamado) return; // não mostra se não tem id!
+      if (!c.codigo_chamado) return;
       const cod = c.codigo_chamado;
       if (!agrupado[cod]) agrupado[cod] = [];
       agrupado[cod].push(c);
     });
 
-    // Ordena crescimento numérico do id
     const idsOrdenados = Object.keys(agrupado).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
 
     let html = `
@@ -100,7 +98,6 @@ async function loadChamadosFinalizados() {
 
     content.innerHTML = html;
 
-    // Botão recarregar
     const btnRec = document.getElementById('btnRecarregarChamadosFinalizados');
     if (btnRec) btnRec.onclick = loadChamadosFinalizados;
 
@@ -126,8 +123,7 @@ async function toggleFinalizadoDetalhes(btn) {
   const codigo = detalhes.getAttribute('data-codigo');
 
   try {
-    // Busca todos slots deste chamado pelo codigo_chamado
-    const res = await fetch(`/api/whatsapp-slots/?finalizado=1&apagado=0`);
+    const res = await fetch(`/api/whatsapp-slots/?finalizado=1`);
     if (!res.ok) throw new Error('Erro ao buscar detalhes do chamado finalizado');
     let msgs = (await res.json()).filter(s => `${s.codigo_chamado}` === codigo);
     msgs.sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));

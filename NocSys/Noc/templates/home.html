@@ -2,49 +2,47 @@
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
-    <meta charset="UTF-8" />
-    <title>NocSys | Home</title>
-    <link rel="stylesheet" href="{% static 'css/home.css' %}" />
+<meta charset="UTF-8"/>
+<title>NocSys</title>
+<style>
+  body{margin:0;font-family:Segoe UI;background:#111827;color:#e5e7eb;display:flex;height:100vh}
+  .sidebar{background:#1e293b;width:220px;padding:20px 0}
+  .logo{font-size:22px;font-weight:700;padding:0 20px;margin-bottom:30px;display:flex;align-items:center;gap:8px}
+  .menu{list-style:none;padding:0;margin:0}
+  .menu li a{display:block;padding:14px 20px;color:#cbd5e1;text-decoration:none}
+  .menu li a:hover{background:#334155}
+  .content{flex:1;padding:40px}
+  h1{font-size:42px;color:#facc15;margin:0}
+  p{font-size:20px;color:#9ca3af}
+</style>
 </head>
 <body>
-    <div class="sidebar">
-        <div class="logo">
-            <span class="logo-icon">🧠</span>
-            <span class="logo-text">NocSys</span>
-        </div>
-        <ul class="menu">
-            <li><a href="#" id="menu-dashboard">🏠 Dashboard</a></li>
-            <li><a href="#" id="menu-chamados">📁 Chamados</a></li>
-            <li><a href="#" id="menu-chamados-finalizados">📊 Chamados Finalizados</a></li>
-            <li><a href="#" id="menu-chamados-apagados">🗑️ Chamados Apagados</a></li>
-            <li><a href="#">⚙️ Configurações</a></li>
-            <li><a href="/logout/">🚪 Sair</a></li>
-        </ul>
+  <div class="sidebar">
+    <div class="logo">
+      <span>🧠</span>
+      <span>NocSys</span>
     </div>
+    <ul class="menu">
+      <li><a href="#" id="menu-chamados-abertos">🟡 Chamados em Aberto</a></li>
+      <li><a href="#" id="menu-chamados-finalizados">📊 Chamados Finalizados</a></li>
+      <li><a href="#">⚙️ Configurações</a></li>
+      <li><a href="/logout/">🚪 Sair</a></li>
+    </ul>
+  </div>
+  <div class="content" id="content-area">
+    <h1>Bem-vindo ao NocSys</h1>
+    <p>Seu centro de controle de chamados internos.</p>
+  </div>
 
-    <div class="content" id="content-area">
-        <h1>Bem-vindo ao NocSys</h1>
-        <p class="fade-in">Seu centro de controle de chamados internos.</p>
-    </div>
-
-    <script src="{% static 'js/chamados.js' %}"></script>
-    <script src="{% static 'js/chamados_finalizados.js' %}"></script>
-    <script src="{% static 'js/deleted.js' %}"></script>
-    <script>
-      document.getElementById("menu-chamados").addEventListener("click", function (e) {
-        e.preventDefault();
-        loadChamados();
-      });
-
-      document.getElementById("menu-chamados-finalizados").addEventListener("click", function (e) {
-        e.preventDefault();
-        loadChamadosFinalizados();
-      });
-
-      document.getElementById("menu-chamados-apagados").addEventListener("click", function (e) {
-        e.preventDefault();
-        loadDeleted();
-      });
-    </script>
+<script src="{% static 'js/abertos.js' %}"></script>
+<script src="{% static 'js/chamados_finalizados.js' %}"></script>
+<script>
+  document.getElementById("menu-chamados-abertos").addEventListener("click", e=>{
+    e.preventDefault(); loadAbertos();
+  });
+  document.getElementById("menu-chamados-finalizados").addEventListener("click", e=>{
+    e.preventDefault(); loadChamadosFinalizados();
+  });
+</script>
 </body>
 </html>

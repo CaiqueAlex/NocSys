@@ -16,8 +16,6 @@ class WhatsappSlot(models.Model):
     chamadofinalizado = models.BooleanField(default=False)
     codigo_chamado = models.CharField(max_length=100, blank=True, null=True)
 
-    deletado = models.BooleanField(default=False)  # NOVO CAMPO para marcar como deletado
-
     criado_em = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

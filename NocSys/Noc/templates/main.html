@@ -1,0 +1,279 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NocSys</title>
+<link rel="icon" type="image/png" href="{% static 'css/Nocsyslogo.png' %}">
+<link rel="stylesheet" href="{% static 'css/main.css' %}" />
+</head>
+<body>
+
+<!-- BARRA SUPERIOR E ANIMAÇÃO - Visível em todas as telas -->
+<div class="top-bar fade-slide-down">
+    <div class="top-bar-left">
+        <button id="menu-toggle-btn" class="menu-toggle-btn" title="Alternar menu">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+        <div class="logo-login">NocSys</div>
+        {% if user.is_authenticated %}
+        <div id="logo-animation-container">
+            <span id="typing-text"></span><span id="blinking-cursor"></span>
+            <div id="face-emoji">
+                <div class="face-eye left"></div>
+                <div class="face-eye right"></div>
+                <div class="face-mouth"></div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    <div class="top-bar-right">
+        <div class="clock" id="clock">--:--:--</div>
+        <div class="theme-switch-wrapper">
+            <label class="theme-switch" for="theme-checkbox">
+                <input type="checkbox" id="theme-checkbox" />
+                <div class="slider round"></div>
+            </label>
+        </div>
+    </div>
+</div>
+<div id="lightbulb-anim-container">
+    <div id="lightbulb">💡</div>
+</div>
+
+
+{% if user.is_authenticated %}
+  <!-- INÍCIO DO CONTEÚDO DA HOME (AUTENTICADO) -->
+  <div class="main-container" id="main-container">
+      <div class="sidebar" id="sidebar">
+        <div class="logo">
+          <img src="{% static 'css/Nocsyslogo.png' %}" alt="NocSys Logo" class="sidebar-logo-img">
+          <span>NocSys</span>
+        </div>
+        <ul class="menu">
+          <li><a href="#" id="menu-chamados-abertos">🟡 Chamados em Aberto</a></li>
+          <li><a href="#" id="menu-chamados-finalizados">📊 Chamados Finalizados</a></li>
+          <li><a href="#">⚙️ Configurações</a></li>
+          <li><a href="{% url 'logout' %}">🚪 Sair</a></li>
+        </ul>
+      </div>
+      <div class="content" id="content-area">
+        <h1>Bem-vindo ao NocSys</h1>
+        <p>Seu centro de controle de chamados internos.</p>
+      </div>
+  </div>
+  <!-- FIM DO CONTEÚDO DA HOME -->
+
+{% else %}
+  <!-- INÍCIO DO CONTEÚDO DE LOGIN (NÃO AUTENTICADO) -->
+  <div class="login-page-container fade-zoom-in">
+    <div class="login-box fade-zoom-in" id="login-box">
+      <h2 class="titlelogin">NocSys - Login</h2>
+      {% if error %}
+        <p class="error">{{ error }}</p>
+      {% endif %}
+      <form method="post" action="{% url 'main' %}" id="login-form">
+        {% csrf_token %}
+        <input type="text" name="username" placeholder="Usuário" required autocomplete="username" />
+        <input type="password" name="password" placeholder="Senha" required autocomplete="current-password" />
+        <button type="submit">Entrar</button>
+      </form>
+    </div>
+  </div>
+  <!-- FIM DO CONTEÚDO DE LOGIN -->
+{% endif %}
+
+<!-- NOVA ANIMAÇÃO DE INATIVIDADE -->
+<div id="inactive-prompt-container">
+    <div class="speech-bubble">
+        <p id="inactive-prompt-text"></p>
+    </div>
+    <div class="prompt-character">🤔</div>
+</div>
+
+
+<!-- SCRIPTS GERAIS -->
+<script src="{% static 'js/abertos.js' %}"></script>
+<script src="{% static 'js/chamados_finalizados.js' %}"></script>
+
+<script>
+  // Scripts da Home Autenticada
+  if (document.getElementById("menu-chamados-abertos")) {
+    document.getElementById("menu-chamados-abertos").addEventListener("click", e => { e.preventDefault(); loadAbertos(); });
+    document.getElementById("menu-chamados-finalizados").addEventListener("click", e => { e.preventDefault(); loadChamadosFinalizados(); });
+  }
+
+  // Script do Login
+  const form = document.getElementById('login-form');
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault(); document.body.classList.add('fade-zoom-out'); setTimeout(() => form.submit(), 400);
+    });
+  }
+
+  // Scripts da Barra Superior e Sidebar
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1. LÓGICA DO RELÓGIO
+    const clockElement = document.getElementById('clock');
+    function updateClock() {
+      if (clockElement) {
+        const now = new Date();
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        clockElement.textContent = `${hours}:${minutes}:${seconds}`;
+      }
+    }
+    setInterval(updateClock, 1000); updateClock();
+
+    // 2. LÓGICA DO TEMA (DARK/LIGHT)
+    const themeToggle = document.getElementById('theme-checkbox');
+    const body = document.body;
+    const lightbulb = document.getElementById('lightbulb');
+    const currentTheme = localStorage.getItem('theme');
+    function applyTheme(theme) {
+        if (theme === 'light') { body.classList.add('light-mode'); themeToggle.checked = true; } 
+        else { body.classList.remove('light-mode'); themeToggle.checked = false; }
+    }
+    if (currentTheme) { applyTheme(currentTheme); }
+    function animateBulb(mode) {
+        lightbulb.className = ''; void lightbulb.offsetWidth;
+        if (mode === 'light') { lightbulb.classList.add('animate-on'); } 
+        else { lightbulb.classList.add('animate-off'); }
+    }
+    themeToggle.addEventListener('change', () => {
+        let newTheme = themeToggle.checked ? 'light' : 'dark';
+        animateBulb(newTheme);
+        setTimeout(() => { applyTheme(newTheme); localStorage.setItem('theme', newTheme); }, 1000);
+    });
+
+    // 3. LÓGICA DA SIDEBAR
+    const menuToggleBtn = document.getElementById('menu-toggle-btn');
+    const sidebar = document.getElementById('sidebar');
+    const mainContainer = document.getElementById('main-container');
+    if (menuToggleBtn && sidebar && mainContainer) {
+        let hoverTimeout;
+        menuToggleBtn.addEventListener('click', () => { sidebar.classList.toggle('sidebar-pinned'); mainContainer.classList.toggle('content-shifted'); });
+        const showSidebarOnHover = () => { clearTimeout(hoverTimeout); if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.add('sidebar-visible'); mainContainer.classList.add('content-shifted'); } };
+        const hideSidebarOnLeave = () => { hoverTimeout = setTimeout(() => { if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.remove('sidebar-visible'); mainContainer.classList.remove('content-shifted'); } }, 300); };
+        menuToggleBtn.addEventListener('mouseenter', showSidebarOnHover);
+        sidebar.addEventListener('mouseenter', showSidebarOnHover);
+        menuToggleBtn.addEventListener('mouseleave', hideSidebarOnLeave);
+        sidebar.addEventListener('mouseleave', hideSidebarOnLeave);
+    }
+    
+    // 4. LÓGICA DA ANIMAÇÃO DO LOGO
+    const animationContainer = document.getElementById('logo-animation-container');
+    if (animationContainer) {
+        const typingText = document.getElementById('typing-text');
+        const face = document.getElementById('face-emoji');
+        const fullText = "Network Operation Center System"; 
+        let isAnimating = false;
+        const runAnimationCycle = async () => {
+            if (isAnimating) return;
+            isAnimating = true;
+            animationContainer.style.width = 'auto'; typingText.textContent = '';
+            for (let i = 0; i < fullText.length; i++) { typingText.textContent += fullText[i]; await new Promise(res => setTimeout(res, 80)); }
+            face.classList.add('animate-face');
+            await new Promise(res => setTimeout(res, 5000));
+            face.classList.remove('animate-face');
+            for (let i = fullText.length; i >= 0; i--) { face.style.transform = `translateX(${(1 - i / fullText.length) * 100}%)`; typingText.textContent = fullText.substring(0, i); await new Promise(res => setTimeout(res, 40)); }
+            animationContainer.style.width = '0'; isAnimating = false;
+        };
+        setInterval(runAnimationCycle, 20000);
+    }
+
+    // 5. NOVA LÓGICA DE PROMPT DE INATIVIDADE
+    const promptContainer = document.getElementById('inactive-prompt-container');
+    if (promptContainer) {
+        const promptText = document.getElementById('inactive-prompt-text');
+        const phrases = [
+            // Frases Originais
+            "Ainda está aí?",
+            "O que acha de se mexer um pouco?",
+            "Um café cairia bem agora...",
+            "Ei, psiu!",
+            "Tudo certo por aqui?",
+            // Novas Frases Adicionadas
+            "Silêncio total... será que dormiu no teclado?",
+            "O tempo parou ou foi você que congelou?",
+            "Se fosse um jogo, já tinha aparecido a tela de pausa 😴",
+            "A cadeira está com saudade de você.",
+            "A energia caiu aí ou só a motivação?",
+            "Se ainda estiver por aí, pisque duas vezes!",
+            "A tela sente sua falta. Volta logo!",
+            "Essa pausa virou meditação?",
+            "A produtividade foi tomar água, você vai junto?",
+            "Vamos fingir que isso foi uma pausa estratégica.",
+            "Tem alguém aí ou só os ecos da última ação?",
+            "Esse silêncio me lembra quando o Wi-Fi cai...",
+            "Atenção: suspeita de modo fantasma ativado.",
+            "O universo está esperando sua próxima jogada.",
+            "Enquanto você pensa, os pixels tiram uma soneca.",
+            "Parece que o teclado entrou em férias coletivas.",
+            "Se tivesse um prêmio por ficar parado... você ganhava!",
+            "Ei, voltou? Ah não, foi só o vento.",
+            "Nem uma piscadinha? Estou começando a me preocupar.",
+            "A pausa tá tão longa que virou feriado.",
+            "O sistema detectou... saudades suas.",
+            "Quase chamei os bombeiros, achei que você tinha evaporado.",
+            "Nem parece que alguém estava digitando aqui há pouco.",
+            "A atividade sumiu mais rápido que as segundas-feiras felizes.",
+            "Não quero ser chato, mas... você esqueceu de mim?",
+            "Será que eu falo sozinho ou você está só disfarçando?",
+            "Se for suspense, já ganhou minha atenção!",
+            "Modo ‘estátua’ ativado com sucesso.",
+            "Só confirmando: você virou poeira cósmica ou foi só um cochilo?",
+            "Tá tudo bem aí? Até a barra de progresso se desesperou!",
+            // Frases Bônus
+            "Alô? Terra chamando...",
+            "O sistema está ocioso. Hora de um alongamento!",
+            "Até os servidores estão mais ativos que você.",
+            "Isso é uma pausa para o café ou uma hibernação?",
+            "Detectei um vácuo de atividade no seu setor."
+        ];
+        
+        let inactivityTimer;
+        let promptIsVisible = false;
+        const INACTIVITY_TIME = 10000; // 10 segundos
+
+        const showPrompt = () => {
+            if (promptIsVisible) return;
+            promptIsVisible = true;
+            
+            // Escolhe uma frase aleatória
+            const randomIndex = Math.floor(Math.random() * phrases.length);
+            promptText.textContent = phrases[randomIndex];
+
+            promptContainer.classList.remove('hiding');
+            promptContainer.classList.add('visible');
+        };
+
+        const hidePrompt = () => {
+            if (!promptIsVisible) return;
+            promptIsVisible = false;
+
+            promptContainer.classList.add('hiding');
+            // Remove a classe 'visible' após a animação de saída para resetar o estado
+            setTimeout(() => {
+                 promptContainer.classList.remove('visible');
+            }, 500); // Duração da animação de saída
+        };
+        
+        const resetInactivityTimer = () => {
+            hidePrompt();
+            clearTimeout(inactivityTimer);
+            inactivityTimer = setTimeout(showPrompt, INACTIVITY_TIME);
+        };
+
+        window.addEventListener('mousedown', resetInactivityTimer);
+        resetInactivityTimer();
+    }
+  });
+</script>
+
+</body>
+</html>

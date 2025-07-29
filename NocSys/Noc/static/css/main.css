@@ -1,0 +1,246 @@
+/* Reset, Variáveis de Tema e Estilo Base */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    /* Tema Escuro (Padrão) */
+    --bg-primary: #111827;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #1f2937;
+    --bg-quaternary: #374151;
+    --text-primary: #e5e7eb;
+    --text-secondary: #9ca3af;
+    --text-tertiary: #d1d5db;
+    --accent-primary: #38bdf8;
+    --accent-secondary: #2563eb;
+    --accent-tertiary: #facc15;
+    --accent-hover: #1e40af;
+    --border-color: #2563eb;
+    --shadow-color: rgba(0, 0, 0, 0.5);
+    --error-color: #f87171;
+    --sidebar-width: 220px;
+}
+
+body.light-mode {
+    /* Tema Claro */
+    --bg-primary: #f9fafb;
+    --bg-secondary: #e5e7eb;
+    --bg-tertiary: #f3f4f6;
+    --bg-quaternary: #d1d5db;
+    --text-primary: #1f2937;
+    --text-secondary: #4b5563;
+    --text-tertiary: #374151;
+    --accent-primary: #0ea5e9;
+    --accent-secondary: #2563eb;
+    --accent-tertiary: #f59e0b;
+    --accent-hover: #1d4ed8;
+    --border-color: #3b82f6;
+    --shadow-color: rgba(0, 0, 0, 0.1);
+    --error-color: #ef4444;
+}
+
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    height: 100vh;
+    overflow-x: hidden;
+    transition: background-color 0.5s ease, color 0.5s ease;
+}
+
+/* =================================== */
+/* NOVA ANIMAÇÃO DE INATIVIDADE        */
+/* =================================== */
+#inactive-prompt-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    /* Estado inicial: invisível e fora da tela à esquerda */
+    opacity: 0;
+    transform: translateX(-50px);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+    pointer-events: none; /* Não interage quando invisível */
+}
+
+#inactive-prompt-container.visible {
+    opacity: 1;
+    transform: translateX(0); /* Entra na tela */
+    pointer-events: auto; /* Permite interação */
+}
+
+#inactive-prompt-container.hiding {
+    opacity: 0;
+    transform: translateX(50px); /* Sai para a direita */
+    pointer-events: none;
+}
+
+.prompt-character {
+    font-size: 5rem; /* Tamanho do emoji */
+    transform: scaleX(-1); /* Emoji olha para a esquerda */
+}
+
+.speech-bubble {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    padding: 15px 20px;
+    border-radius: 15px;
+    max-width: 200px;
+    box-shadow: 0 4px 12px var(--shadow-color);
+    position: relative;
+    margin-bottom: 20px;
+    font-weight: 500;
+}
+/* "Rabo" do balão de fala */
+.speech-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    right: -15px;
+    width: 0;
+    height: 0;
+    border: 20px solid transparent;
+    border-left-color: var(--bg-tertiary);
+    border-bottom: 0;
+    margin-top: -10px;
+    margin-right: -20px;
+}
+
+
+/* =================================== */
+/* COMPONENTES GLOBAIS (BARRA SUPERIOR)*/
+/* =================================== */
+
+.top-bar { position: fixed; top: 0; left: 0; right: 0; height: 3.5rem; background-color: var(--bg-primary); color: var(--accent-primary); display: flex; justify-content: space-between; align-items: center; padding: 0 1.5rem; font-weight: bold; z-index: 100; box-shadow: 0 2px 8px var(--shadow-color); transition: background-color 0.5s ease; }
+.top-bar-left { display: flex; align-items: center; gap: 1rem; overflow: hidden; flex-shrink: 1; }
+.menu-toggle-btn { background: none; border: none; cursor: pointer; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.menu-toggle-btn span { display: block; width: 22px; height: 3px; background-color: var(--accent-primary); border-radius: 2px; transition: transform 0.3s ease, opacity 0.3s ease; }
+.logo-login { font-weight: bold; font-size: 1.5rem; white-space: nowrap; }
+#logo-animation-container { display: flex; align-items: center; font-size: 1.5rem; font-weight: bold; white-space: nowrap; width: 0; color: var(--text-primary); vertical-align: middle; }
+#typing-text { display: inline-block; }
+#blinking-cursor { display: inline-block; background-color: var(--accent-primary); width: 2px; height: 1.4rem; margin-left: 1px; vertical-align: middle; }
+@keyframes blink { from, to { opacity: 1; } 50% { opacity: 0; } }
+#face-emoji { display: none; align-items: center; justify-content: center; position: relative; width: 28px; height: 28px; background-color: #facc15; border-radius: 50%; margin-left: 8px; opacity: 0; }
+#face-emoji.animate-face { display: inline-flex; animation: peek-look-wink-corrected 5s ease-in-out forwards; }
+.face-eye { position: absolute; width: 4px; height: 5px; background-color: var(--bg-primary); border-radius: 50%; top: 9px; }
+.face-eye.left { left: 7px; }
+.face-eye.right { right: 7px; }
+.face-mouth { position: absolute; width: 10px; height: 5px; border-bottom: 2px solid var(--bg-primary); border-radius: 0 0 5px 5px; bottom: 6px; }
+
+/* CORREÇÃO DA ANIMAÇÃO DO ROSTO */
+@keyframes peek-look-wink-corrected {
+    0%   { opacity: 0; transform: translateY(20px); }
+    20%  { opacity: 1; transform: translateY(0); }
+    30%  { } /* Pausa no centro */
+    40%  { transform: translateX(-3px); } /* Olha esquerda */
+    50%  { } 
+    60%  { transform: translateX(3px); } /* Olha direita */
+    70%  { transform: translateX(0); } /* Volta ao centro */
+    75%  { transform: scaleY(0.1) translateX(0); } /* Pisca os dois olhos */
+    80%  { transform: scaleY(1) translateX(0); } /* Abre os olhos */
+    90%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+#face-emoji.animate-face .face-eye {
+    animation: eye-movement-corrected 5s ease-in-out forwards;
+}
+@keyframes eye-movement-corrected {
+    0%, 30%, 70%, 100% { transform: translateY(0); }
+    40%, 60% { transform: translateY(4px); } /* Olha para baixo enquanto vira */
+}
+
+.top-bar-right { display: flex; align-items: center; gap: 20px; }
+.clock { font-family: monospace; font-size: 1rem; white-space: nowrap; }
+.theme-switch-wrapper { display: flex; align-items: center; }
+.theme-switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+.theme-switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .4s; }
+.slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+input:checked+.slider { background-color: var(--accent-secondary); }
+input:checked+.slider:before { transform: translateX(24px); }
+.slider.round { border-radius: 34px; }
+.slider.round:before { border-radius: 50%; }
+#lightbulb-anim-container { position: fixed; top: 3.5rem; left: 50%; transform: translateX(-50%); width: 60px; height: 300px; z-index: 99; pointer-events: none; }
+#lightbulb { font-size: 40px; position: absolute; top: -100px; left: 0; opacity: 0; }
+#lightbulb.animate-on { animation: dropAndGlow 2s ease-in-out forwards; }
+#lightbulb.animate-off { animation: dropAndFade 2s ease-in-out forwards; }
+@keyframes dropAndGlow { 0% { top: -100px; opacity: 0; } 40% { top: 100px; opacity: 1; text-shadow: none; } 50% { top: 100px; opacity: 1; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 100% { top: -100px; opacity: 0; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } }
+@keyframes dropAndFade { 0% { top: -100px; opacity: 0; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 40% { top: 100px; opacity: 1; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 50% { top: 100px; opacity: 1; text-shadow: none; } 100% { top: -100px; opacity: 0; text-shadow: none; } }
+
+/* =================================== */
+/* LAYOUTS DAS TELAS */
+/* =================================== */
+.main-container { display: flex; width: 100%; padding-top: 3.5rem; height: 100vh; transition: margin-left 0.4s ease-in-out; }
+.main-container.content-shifted { margin-left: var(--sidebar-width); }
+.login-page-container { display: flex; justify-content: center; align-items: center; width: 100vw; height: 100vh; padding-top: 3.5rem; }
+
+/* =================================== */
+/* ESTILOS DA HOME (SIDEBAR, CONTENT, ETC) */
+/* =================================== */
+.sidebar { position: fixed; left: 0; top: 3.5rem; height: calc(100vh - 3.5rem); width: var(--sidebar-width); background-color: var(--bg-primary); display: flex; flex-direction: column; padding: 20px 0; box-shadow: 2px 0 8px var(--shadow-color); transform: translateX(-100%); transition: transform 0.4s ease-in-out; z-index: 90; }
+.sidebar.sidebar-visible, .sidebar.sidebar-pinned { transform: translateX(0); }
+.sidebar .logo { display: flex; align-items: center; gap: 10px; font-size: 1.5em; font-weight: bold; margin-bottom: 30px; padding: 0 20px; color: var(--accent-primary); }
+.sidebar-logo-img { width: 32px; height: 32px; object-fit: contain; }
+.menu { list-style: none; display: flex; flex-direction: column; gap: 10px; padding: 0; margin: 0; }
+.menu li a { color: var(--text-tertiary); text-decoration: none; transition: all 0.2s ease-in-out; padding: 14px 20px; display: block; }
+.menu li a:hover { background-color: var(--bg-quaternary); color: var(--text-primary); }
+.content { flex: 1; padding: 40px; width: 100%; overflow-y: auto; }
+.content h1 { font-size: 2.5em; margin-bottom: 15px; color: var(--accent-tertiary); }
+.content p { font-size: 1.2em; color: var(--text-secondary); }
+
+/* =================================== */
+/* NOVO ESTILO DOS CHAMADOS            */
+/* =================================== */
+.chamado { background-color: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; box-shadow: 0 2px 10px var(--shadow-color); transition: background 0.3s ease; overflow: hidden; }
+.chamado-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; cursor: pointer; border-left: 4px solid var(--accent-primary); }
+.chamado-header:hover { background-color: var(--bg-tertiary); }
+.chamado-info { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.chamado-info strong { font-size: 1em; color: var(--text-primary); white-space: nowrap; }
+.chamado-info-dates { font-size: 0.85em; color: var(--text-secondary); display: flex; gap: 12px; white-space: nowrap; }
+.chamado-actions .botao-mostrar { background-color: var(--accent-secondary); color: white; border: none; padding: 6px 14px; border-radius: 5px; font-weight: 600; transition: background-color 0.2s ease; }
+.chamado-actions .botao-mostrar:hover { background-color: var(--accent-hover); }
+.chamado-detalhes { display: none; padding: 20px; background-color: var(--bg-tertiary); border-top: 1px solid var(--bg-quaternary); }
+.conversa-container { max-height: 350px; overflow-y: auto; border: 1px solid var(--bg-quaternary); padding: 14px 8px; border-radius: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-secondary); margin-bottom: 20px; }
+.mensagem { padding: 10px 14px; border-radius: 16px; max-width: 72%; min-width: 90px; white-space: pre-wrap; font-size: 1.03em; box-shadow: 0 1px 2px rgba(0,0,0,0.16); position: relative; display: flex; flex-direction: column; }
+.mensagem.suporte { background: var(--accent-secondary); color:#fff; align-self: flex-end; }
+.mensagem.cliente { background: var(--bg-quaternary); color: var(--text-primary); align-self: flex-start; }
+.mensagem-header { display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:4px; user-select:none; }
+.mensagem-header span:last-child { opacity: .75; }
+.detalhes-suporte-container { margin-top: 13px; padding: 18px 12px 12px 16px; border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 2px 12px rgba(0,0,0,0.2); }
+.detalhes-suporte-container h3 { font-size: 1.13em; color: var(--accent-tertiary); font-weight: 700; margin-bottom: 13px; letter-spacing: .5px; }
+.detalhes-grid { display: grid; grid-template-columns: 160px 1fr; gap: 7px 14px; align-items: center; }
+.detalhes-grid span { color: var(--accent-primary); font-weight: 500; opacity: 0.9; }
+.detalhes-grid input,
+.detalhes-grid textarea { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--bg-quaternary); border-radius: 5px; padding: 6px 10px; width: 100%; }
+.detalhes-grid textarea { resize: vertical; }
+
+/* =================================== */
+/* ESTILOS DO LOGIN (CAIXA, FORM, ETC) */
+/* =================================== */
+.login-box { position: relative; background-color: var(--bg-primary); color: var(--text-primary); padding: 2rem; border-radius: 10px; width: 320px; max-width: 90vw; box-shadow: 0 4px 12px var(--shadow-color); z-index: 101; transition: background-color 0.5s ease, color 0.5s ease; }
+.titlelogin { text-align: center; margin-bottom: 1rem; font-size: 1.5rem; color: var(--accent-tertiary); }
+.login-box form { display: flex; flex-direction: column; }
+.login-box input,
+.login-box button { width: 100%; padding: 0.75rem; margin: 0.5rem 0; border: none; border-radius: 5px; font-size: 1rem; }
+.login-box input { background-color: var(--bg-tertiary); color: var(--text-primary); transition: background-color 0.5s ease; }
+.login-box input::placeholder { color: var(--text-secondary); }
+.login-box input:focus { outline: 2px solid var(--accent-secondary); background-color: var(--bg-quaternary); color: var(--text-primary); }
+.login-box button { background-color: var(--accent-secondary); color: #fff; cursor: pointer; font-weight: 600; transition: background-color 0.2s ease-in-out; }
+.login-box button:hover { background-color: var(--accent-hover); }
+.error { color: var(--error-color); font-size: 0.9rem; text-align: center; margin-bottom: 0.5rem; }
+
+/* Animações de Fade/Zoom (sem alteração) */
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+.fade-zoom-in { animation: fadeZoomIn 0.5s ease forwards; }
+.fade-zoom-out { animation: fadeZoomOut 0.4s ease forwards; }
+.fade-slide-down { animation: fadeSlideDown 0.6s ease forwards; }
+@keyframes fadeZoomIn { 0% { opacity: 0; transform: scale(0.9); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes fadeZoomOut { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0.9); } }
+@keyframes fadeSlideDown { 0% { opacity: 0; transform: translateY(-20px); } 100% { opacity: 1; transform: translateY(0); } }

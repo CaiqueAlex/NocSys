@@ -9,41 +9,46 @@ from rest_framework.permissions import AllowAny
 from rest_framework import status
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from django.db.models import Max, Q
+from django.db.models import Max, Q, IntegerField
+from django.db.models.functions import Cast
 from .models import WhatsappSlot
 from .serializers import WhatsappSlotSerializer
 
-def login_view(request):
+def main_view(request):
+    # Processa o formulário de login via POST
     if request.method == 'POST':
         username = request.POST.get('username')
         password = request.POST.get('password')
         user = authenticate(request, username=username, password=password)
         if user is not None:
             login(request, user)
-            next_url = request.POST.get('next') or 'home'
-            return redirect(next_url)
+            return redirect('main')  # Redireciona para a mesma página, que agora mostrará a home
         else:
-            return render(request, 'login.html', {'error': 'Usuário ou senha inválidos.'})
-    return render(request, 'login.html')
+            # Renderiza a página novamente com uma mensagem de erro
+            return render(request, 'main.html', {'error': 'Usuário ou senha inválidos.'})
 
-@login_required(login_url='login')
-def home_view(request):
-    return render(request, 'home.html')
+    # Para requisições GET, apenas renderiza a página.
+    # O template decidirá o que mostrar com base no status de autenticação.
+    return render(request, 'main.html')
 
-@login_required(login_url='login')
+@login_required(login_url='main') # Aponta para a nova view principal caso o acesso seja negado
 def logout_view(request):
     logout(request)
-    return redirect('login')
+    return redirect('main') # Redireciona para a página principal (que mostrará o login)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
 @authentication_classes([])
 def get_next_codigo(request):
-    max_codigo_str = WhatsappSlot.objects.aggregate(Max('codigo_chamado'))['codigo_chamado__max']
-    try:
-        max_num = int(max_codigo_str) if max_codigo_str else 0
-    except (TypeError, ValueError):
-        max_num = 0
+    # CORREÇÃO APLICADA AQUI:
+    # Converte o campo 'codigo_chamado' (que é texto) para um Inteiro antes de agregar.
+    # Isso garante que a comparação seja numérica (10 > 9) e não alfabética ('9' > '10').
+    max_codigo_obj = WhatsappSlot.objects.annotate(
+        codigo_as_int=Cast('codigo_chamado', output_field=IntegerField())
+    ).aggregate(max_codigo=Max('codigo_as_int'))
+
+    max_num = max_codigo_obj['max_codigo'] or 0
+    
     novo_codigo = str(max_num + 1)
     return Response({"codigo": novo_codigo})
 
@@ -71,11 +76,13 @@ class WhatsappSlotCreateOrUpdateAPIView(APIView):
 
         if conversation_key:
             qs_filter &= Q(conversation_key=conversation_key)
-        
+
         if finalizado is not None:
             is_finalizado = finalizado.lower() in ['1', 'true', 'sim', 'yes']
             qs_filter &= Q(chamadofinalizado=is_finalizado)
-            if not is_finalizado:
+            # Ao buscar em aberto, só queremos os que não têm código ainda
+            # Esta lógica pode precisar de ajuste dependendo do fluxo exato
+            if not is_finalizado and 'conversation_key' in request.query_params:
                  qs_filter &= Q(codigo_chamado__isnull=True)
 
 
@@ -114,7 +121,8 @@ class WhatsappSlotListAPIView(ListAPIView):
         finalizado = self.request.query_params.get('finalizado')
         if finalizado is not None:
             is_finalizado = finalizado.lower() in ['1', 'true', 'sim', 'yes']
-            qs = qs.filter(chamadofinalizado=is_finalizado)
+            # Para a listagem geral, queremos apenas os que JÁ TÊM um código
+            qs = qs.filter(chamadofinalizado=is_finalizado, codigo_chamado__isnull=False)
         return qs
 
 class WhatsappSlotUpdateAPIView(RetrieveUpdateAPIView):

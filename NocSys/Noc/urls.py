@@ -1,9 +1,15 @@
 from django.urls import path
 from . import views
+from django.views.generic.base import RedirectView
 
 urlpatterns = [
-    path('', views.login_view, name='login'),
-    path('home/', views.home_view, name='home'),
+    # Redireciona a raiz do site para /NocSys/
+    path('', RedirectView.as_view(pattern_name='main', permanent=False)),
+    
+    # URL principal da aplicação
+    path('NocSys/', views.main_view, name='main'),
+    
+    # URL de Logout
     path('logout/', views.logout_view, name='logout'),
 
     # API para o bot

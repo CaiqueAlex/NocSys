@@ -9,9 +9,12 @@ class WhatsappSlot(models.Model):
 
     suporte = models.CharField(max_length=100, blank=True, null=True)
     cliente = models.CharField(max_length=100, blank=True, null=True)
+    resumo = models.CharField(max_length=200, blank=True, null=True)
     problema = models.TextField(blank=True, null=True)
     indicador = models.CharField(max_length=100, blank=True, null=True)
     tempo_solucao = models.CharField(max_length=100, blank=True, null=True)
+    solucao = models.TextField(blank=True, null=True) # <-- ADICIONADO
+    setor = models.CharField(max_length=100, blank=True, null=True) # <-- ADICIONADO
 
     chamadofinalizado = models.BooleanField(default=False)
     codigo_chamado = models.CharField(max_length=100, blank=True, null=True)

@@ -31,6 +31,7 @@
         {% endif %}
     </div>
     <div class="top-bar-right">
+        <button id="settings-btn" title="Configurações">⚙️</button>
         <div class="clock" id="clock">--:--:--</div>
         <div class="theme-switch-wrapper">
             <label class="theme-switch" for="theme-checkbox">
@@ -47,6 +48,7 @@
 
 {% if user.is_authenticated %}
   <!-- INÍCIO DO CONTEÚDO DA HOME (AUTENTICADO) -->
+  <div id="csrf-container" style="display: none;">{% csrf_token %}</div>
   <div class="main-container" id="main-container">
       <div class="sidebar" id="sidebar">
         <div class="logo">
@@ -54,15 +56,14 @@
           <span>NocSys</span>
         </div>
         <ul class="menu">
+          <li><a href="#" id="menu-dashboard">🏠 Dashboard</a></li>
           <li><a href="#" id="menu-chamados-abertos">🟡 Chamados em Aberto</a></li>
           <li><a href="#" id="menu-chamados-finalizados">📊 Chamados Finalizados</a></li>
-          <li><a href="#">⚙️ Configurações</a></li>
           <li><a href="{% url 'logout' %}">🚪 Sair</a></li>
         </ul>
       </div>
       <div class="content" id="content-area">
-        <h1>Bem-vindo ao NocSys</h1>
-        <p>Seu centro de controle de chamados internos.</p>
+        <!-- O conteúdo será carregado dinamicamente aqui -->
       </div>
   </div>
   <!-- FIM DO CONTEÚDO DA HOME -->
@@ -86,7 +87,7 @@
   <!-- FIM DO CONTEÚDO DE LOGIN -->
 {% endif %}
 
-<!-- NOVA ANIMAÇÃO DE INATIVIDADE -->
+<!-- Animação de Inatividade -->
 <div id="inactive-prompt-container">
     <div class="speech-bubble">
         <p id="inactive-prompt-text"></p>
@@ -94,14 +95,419 @@
     <div class="prompt-character">🤔</div>
 </div>
 
+<!-- MODAL DE CONFIRMAÇÃO DE EXCLUSÃO -->
+<div id="confirm-delete-backdrop" class="modal-backdrop hidden">
+    <div id="confirm-delete-box" class="modal-box">
+        <div id="confirm-initial-view">
+            <h2 id="confirm-delete-title"></h2>
+            <div class="modal-buttons">
+                <button id="confirm-delete-no-btn">Não, mudei de ideia!</button>
+                <button id="confirm-delete-yes-btn">Sim, pode apagar!</button>
+            </div>
+        </div>
+        <div id="confirm-success-view" class="hidden">
+            <p style="font-size: 1.5rem; text-align: center;">Apagado! ✅</p>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL DE CONFIRMAÇÃO DE FINALIZAÇÃO -->
+<div id="confirm-finalize-backdrop" class="modal-backdrop hidden">
+    <div id="confirm-finalize-box" class="modal-box">
+        <div id="confirm-initial-view-finalize">
+            <h2 id="confirm-finalize-title"></h2>
+            <div class="modal-buttons">
+                <button id="confirm-finalize-no-btn">Cancelar</button>
+                <button id="confirm-finalize-yes-btn">Sim, finalizar chamado!</button>
+            </div>
+        </div>
+        <div id="confirm-finalize-success-view" class="hidden">
+            <p style="font-size: 1.5rem; text-align: center;">Chamado Finalizado! ✔️</p>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL DE EDIÇÃO DE CHAMADO -->
+<div id="edit-chamado-backdrop" class="modal-backdrop hidden">
+    <div id="edit-chamado-box" class="modal-box">
+        <button id="edit-chamado-close-btn" class="modal-close-btn">&times;</button>
+        
+        <div id="edit-chamado-form-view">
+            <h2>Editar Chamado #<span id="edit-chamado-codigo"></span></h2>
+            <form id="edit-chamado-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
+                <div class="detalhes-grid">
+                    <span>Suporte:</span>
+                    <div class="suporte-field-container">
+                        <select name="suporte" id="suporte-select"></select>
+                        <button type="button" id="assign-to-me-btn" title="Atribuir a mim">👤</button>
+                    </div>
+                    <span>Cliente:</span> <input name="cliente" readonly />
+                    <span>Setor:</span> <input name="setor" />
+                    <span>Resumo:</span> <input name="resumo" />
+                    <span>Problema:</span> <textarea name="problema" rows="3"></textarea>
+                    <span>Solução:</span> <textarea name="solucao" rows="3"></textarea>
+                    <span>Indicador:</span>
+                    <select name="indicador">
+                        <option value="">Selecione...</option>
+                        <option value="Requisição">Requisição</option>
+                        <option value="Incidente">Incidente</option>
+                    </select>
+                    <span>Tempo Solução:</span> <input name="tempo_solucao" readonly />
+                </div>
+                <div class="modal-buttons">
+                    <button type="submit" id="edit-chamado-save-btn">Salvar Alterações</button>
+                </div>
+            </form>
+        </div>
+        
+        <div id="edit-chamado-success-view" class="hidden">
+            <p style="font-size: 1.5rem; text-align: center;">Alterações salvas! ✅</p>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL DE CONFIGURAÇÕES -->
+<div id="settings-backdrop" class="modal-backdrop hidden">
+    <div id="settings-box" class="modal-box">
+        <div class="settings-container fade-in">
+            <div class="settings-sidebar">
+                <h3>Configurações</h3>
+                <ul>
+                    <li><a href="#" class="settings-nav-link active" data-target="settings-view-user">👤 Usuário</a></li>
+                    <li><a href="#" class="settings-nav-link" data-target="settings-view-export">📤 Exportar XML</a></li>
+                </ul>
+            </div>
+            <div class="settings-content">
+                <button id="settings-close-btn" class="modal-close-btn">&times;</button>
+                
+                <!-- View do Usuário -->
+                <div id="settings-view-user" class="settings-view">
+                    <h2>Detalhes do Usuário</h2>
+                    <div class="user-details-grid">
+                        <span>Nome Completo:</span> <strong id="settings-user-name">Carregando...</strong>
+                        <span>Email:</span> <strong id="settings-user-email">Carregando...</strong>
+                        <span>Usuário:</span> <strong id="settings-user-username">Carregando...</strong>
+                        <hr>
+                        <span>Membro desde:</span> <strong id="settings-user-joined">Carregando...</strong>
+                        <span>Chamados Finalizados:</span> <strong id="settings-finalizados-count">Carregando...</strong>
+                    </div>
+                </div>
+
+                <!-- View de Exportação -->
+                <div id="settings-view-export" class="settings-view hidden">
+                    <h2>Exportar Dados</h2>
+                    <p>Funcionalidade em desenvolvimento (WIP). Em breve você poderá exportar seus dados em formato XML.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 
 <!-- SCRIPTS GERAIS -->
+<script src="{% static 'js/dashboard.js' %}"></script>
 <script src="{% static 'js/abertos.js' %}"></script>
 <script src="{% static 'js/chamados_finalizados.js' %}"></script>
+<script src="{% static 'js/config.js' %}"></script>
 
 <script>
+  // --- FUNÇÃO PARA PEGAR O CSRF TOKEN ---
+  function getCsrfToken() {
+    // Busca o token no container para usuários logados, ou no form de login para não logados.
+    const csrfInput = document.querySelector('#csrf-container [name="csrfmiddlewaretoken"]') || document.querySelector('#login-form [name="csrfmiddlewaretoken"]');
+    return csrfInput ? csrfInput.value : '';
+  }
+
+  // --- LÓGICA DO MODAL DE EDIÇÃO (CENTRALIZADA) ---
+  async function showEditModal(codigo) {
+    const backdrop = document.getElementById('edit-chamado-backdrop');
+    const formView = document.getElementById('edit-chamado-form-view');
+    const successView = document.getElementById('edit-chamado-success-view');
+    const form = document.getElementById('edit-chamado-form');
+    const closeBtn = document.getElementById('edit-chamado-close-btn');
+    const suporteSelect = document.getElementById('suporte-select');
+    const assignBtn = document.getElementById('assign-to-me-btn');
+
+    formView.classList.remove('hidden', 'content-hiding');
+    successView.classList.add('hidden');
+    backdrop.classList.remove('hidden');
+    document.getElementById('edit-chamado-codigo').textContent = codigo;
+    form.reset();
+
+    const saveBtn = document.getElementById('edit-chamado-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Carregando...';
+
+    const isFinalizadoElement = document.getElementById(`chamado-${codigo}`);
+    const isFinalizado = isFinalizadoElement && isFinalizadoElement.closest('#content-area').querySelector('h1')?.textContent.includes('Finalizados');
+    
+    try {
+        const usersRes = await fetch('/api/users/');
+        if (!usersRes.ok) throw new Error('Falha ao carregar lista de usuários.');
+        const users = await usersRes.json();
+        
+        suporteSelect.innerHTML = '<option value="">Selecione...</option>';
+        users.forEach(user => {
+            const option = document.createElement('option');
+            option.value = user;
+            option.textContent = user;
+            suporteSelect.appendChild(option);
+        });
+
+        const res = await fetch(`/api/whatsapp-slots/?finalizado=${isFinalizado ? 1 : 0}`);
+        if (!res.ok) throw new Error('Falha ao carregar dados do chamado.');
+        
+        const chamados = await res.json();
+        const ultimoSlot = chamados
+            .filter(s => s.codigo_chamado === codigo)
+            .sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em))[0];
+
+        if (ultimoSlot) {
+            form.elements.suporte.value = ultimoSlot.suporte || '';
+            form.elements.cliente.value = ultimoSlot.cliente || '';
+            form.elements.setor.value = ultimoSlot.setor || '';
+            form.elements.resumo.value = ultimoSlot.resumo || '';
+            form.elements.problema.value = ultimoSlot.problema || '';
+            form.elements.solucao.value = ultimoSlot.solucao || '';
+            form.elements.indicador.value = ultimoSlot.indicador || '';
+            form.elements.tempo_solucao.value = ultimoSlot.tempo_solucao || (isFinalizado ? 'N/A' : 'Ainda em aberto');
+        }
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Salvar Alterações';
+
+    } catch (error) {
+        console.error("Erro ao popular formulário de edição:", error);
+        alert(error.message);
+        backdrop.classList.add('hidden');
+        return;
+    }
+
+    const hide = () => { backdrop.classList.add('hidden'); };
+    
+    const assignToMe = async () => {
+        try {
+            const res = await fetch('/api/user/stats/');
+            if (!res.ok) throw new Error('Falha ao obter dados do usuário logado.');
+            const userData = await res.json();
+            suporteSelect.value = userData.username;
+        } catch(error) { alert(error.message); }
+    };
+
+    const handleSave = async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        const data = Object.fromEntries(formData.entries());
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Salvando...';
+
+        try {
+            const response = await fetch(`/api/chamado/atualizar/${codigo}/`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                body: JSON.stringify(data),
+            });
+            if (!response.ok) throw new Error('Falha ao salvar as alterações.');
+
+            formView.classList.add('content-hiding');
+            setTimeout(() => {
+                formView.classList.add('hidden');
+                successView.classList.remove('hidden');
+                setTimeout(() => {
+                    hide();
+                    if (isFinalizado) { loadChamadosFinalizados(); } 
+                    else { loadAbertos(); }
+                }, 1200);
+            }, 300);
+
+        } catch (error) {
+            console.error('Erro ao salvar:', error);
+            alert(error.message);
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Salvar Alterações';
+        }
+    };
+    
+    const cleanupListeners = () => {
+        form.removeEventListener('submit', handleSave);
+        closeBtn.removeEventListener('click', handleClose);
+        assignBtn.removeEventListener('click', assignToMe);
+    };
+    const handleClose = () => { hide(); cleanupListeners(); };
+    
+    form.addEventListener('submit', handleSave);
+    closeBtn.addEventListener('click', handleClose);
+    assignBtn.addEventListener('click', assignToMe);
+  }
+
+  // --- LÓGICA DOS MODAIS DE CONFIRMAÇÃO ---
+
+  // Função genérica para animação de escrita
+  function typeWriter(element, text, speed) {
+      return new Promise((resolve) => {
+          let i = 0;
+          element.innerHTML = '';
+          const cursor = '<span class="cursor"></span>';
+          element.innerHTML = cursor;
+          function type() {
+              if (i < text.length) {
+                  element.innerHTML = text.substring(0, i + 1) + cursor;
+                  i++;
+                  setTimeout(type, speed);
+              } else {
+                  element.innerHTML = text;
+                  resolve();
+              }
+          }
+          type();
+      });
+  }
+
+  // Modal de Exclusão
+  const deletePhrases = [
+      "Tem certeza? 😕 Apagar o chamado #{codigo} é um caminho sem volta... tipo meia perdida na máquina de lavar.",
+      "Certeza mesmo? 🧐 O chamado #{codigo} será enviado para o vácuo cósmico, de onde nada retorna.",
+      "Última chance! 😬 Clicar em 'Sim' vai deletar o chamado #{codigo} mais rápido que um piscar de olhos.",
+      "Pense bem... O histórico do chamado #{codigo} está prestes a virar poeira digital. Continuar?",
+      "Alerta! 🚨 O chamado #{codigo} será permanentemente excluído. Não temos um 'desfazer' para isso."
+  ];
+  function showDeleteConfirmModal(codigo) {
+      const backdrop = document.getElementById('confirm-delete-backdrop');
+      const title = document.getElementById('confirm-delete-title');
+      const noBtn = document.getElementById('confirm-delete-no-btn');
+      const yesBtn = document.getElementById('confirm-delete-yes-btn');
+      
+      backdrop.querySelector('#confirm-initial-view').classList.remove('hidden', 'content-hiding');
+      backdrop.querySelector('#confirm-success-view').classList.add('hidden');
+      backdrop.classList.remove('hidden');
+
+      const message = deletePhrases[Math.floor(Math.random() * deletePhrases.length)].replace('{codigo}', codigo);
+      typeWriter(title, message, 25);
+
+      return new Promise(resolve => {
+          const handleYesClick = () => { resolve(true); cleanup(); };
+          const handleNoClick = () => { backdrop.classList.add('hidden'); resolve(false); cleanup(); };
+          const cleanup = () => {
+              yesBtn.removeEventListener('click', handleYesClick);
+              noBtn.removeEventListener('click', handleNoClick);
+          };
+          yesBtn.addEventListener('click', handleYesClick, { once: true });
+          noBtn.addEventListener('click', handleNoClick, { once: true });
+      });
+  }
+  async function apagarChamado(codigo) {
+      if (!(await showDeleteConfirmModal(codigo))) return;
+
+      const backdrop = document.getElementById('confirm-delete-backdrop');
+      const initialView = document.getElementById('confirm-initial-view');
+      const successView = document.getElementById('confirm-success-view');
+      
+      initialView.classList.add('content-hiding');
+      setTimeout(() => {
+          initialView.classList.add('hidden');
+          successView.classList.remove('hidden');
+      }, 300);
+
+      try {
+          const response = await fetch(`/api/chamado/apagar/${codigo}/`, {
+              method: 'DELETE',
+              headers: { 'X-CSRFToken': getCsrfToken() }
+          });
+          if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.detail || 'Falha ao apagar o chamado.');
+          }
+          await new Promise(res => setTimeout(res, 1200));
+          backdrop.classList.add('hidden');
+          const chamadoElement = document.getElementById(`chamado-${codigo}`);
+          if (chamadoElement) {
+              chamadoElement.style.transition = 'opacity 0.5s ease';
+              chamadoElement.style.opacity = '0';
+              setTimeout(() => chamadoElement.remove(), 500);
+          }
+      } catch (error) {
+          backdrop.classList.add('hidden');
+          alert(`Erro: ${error.message}`);
+          console.error('Erro ao apagar chamado:', error);
+      }
+  }
+
+  // Modal de Finalização
+  const finalizePhrases = [
+    "Pronto para encerrar o chamado #{codigo}? 🚀 O cliente agradece!",
+    "Finalizar o chamado #{codigo}? Missão (quase) cumprida. Só falta seu clique.",
+    "Bora dar baixa no chamado #{codigo}? ✔️ Mais um pra conta!",
+  ];
+  function showFinalizeConfirmModal(codigo) {
+      const backdrop = document.getElementById('confirm-finalize-backdrop');
+      const title = document.getElementById('confirm-finalize-title');
+      const noBtn = document.getElementById('confirm-finalize-no-btn');
+      const yesBtn = document.getElementById('confirm-finalize-yes-btn');
+      
+      backdrop.querySelector('#confirm-initial-view-finalize').classList.remove('hidden', 'content-hiding');
+      backdrop.querySelector('#confirm-finalize-success-view').classList.add('hidden');
+      backdrop.classList.remove('hidden');
+
+      const message = finalizePhrases[Math.floor(Math.random() * finalizePhrases.length)].replace('{codigo}', codigo);
+      typeWriter(title, message, 25);
+
+      return new Promise(resolve => {
+          const handleYesClick = () => { resolve(true); cleanup(); };
+          const handleNoClick = () => { backdrop.classList.add('hidden'); resolve(false); cleanup(); };
+          const cleanup = () => {
+              yesBtn.removeEventListener('click', handleYesClick);
+              noBtn.removeEventListener('click', handleNoClick);
+          };
+          yesBtn.addEventListener('click', handleYesClick, { once: true });
+          noBtn.addEventListener('click', handleNoClick, { once: true });
+      });
+  }
+  async function finalizarChamado(codigo) {
+      if (!(await showFinalizeConfirmModal(codigo))) return;
+
+      const backdrop = document.getElementById('confirm-finalize-backdrop');
+      const initialView = document.getElementById('confirm-initial-view-finalize');
+      const successView = document.getElementById('confirm-finalize-success-view');
+
+      initialView.classList.add('content-hiding');
+      setTimeout(() => {
+          initialView.classList.add('hidden');
+          successView.classList.remove('hidden');
+      }, 300);
+      
+      try {
+          const response = await fetch(`/api/chamado/finalizar/${codigo}/`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+              body: JSON.stringify({})
+          });
+          if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.detail || 'Falha ao finalizar o chamado.');
+          }
+          await new Promise(res => setTimeout(res, 1200));
+          backdrop.classList.add('hidden');
+          const chamadoElement = document.getElementById(`chamado-${codigo}`);
+          if (chamadoElement) {
+              chamadoElement.style.transition = 'opacity 0.5s ease, transform 0.5s ease, height 0.5s ease, margin 0.5s ease, padding 0.5s ease';
+              chamadoElement.style.opacity = '0';
+              chamadoElement.style.transform = 'scale(0.95)';
+              chamadoElement.style.height = '0';
+              chamadoElement.style.margin = '0';
+              chamadoElement.style.padding = '0';
+              setTimeout(() => chamadoElement.remove(), 500);
+          }
+      } catch (error) {
+          backdrop.classList.add('hidden');
+          alert(`Erro: ${error.message}`);
+          console.error('Erro ao finalizar chamado:', error);
+      }
+  }
+
+
   // Scripts da Home Autenticada
   if (document.getElementById("menu-chamados-abertos")) {
+    document.getElementById("menu-dashboard").addEventListener("click", e => { e.preventDefault(); loadDashboard(); });
     document.getElementById("menu-chamados-abertos").addEventListener("click", e => { e.preventDefault(); loadAbertos(); });
     document.getElementById("menu-chamados-finalizados").addEventListener("click", e => { e.preventDefault(); loadChamadosFinalizados(); });
   }
@@ -116,7 +522,7 @@
 
   // Scripts da Barra Superior e Sidebar
   document.addEventListener('DOMContentLoaded', () => {
-    // 1. LÓGICA DO RELÓGIO
+    if (document.querySelector('.main-container')) { loadDashboard(); }
     const clockElement = document.getElementById('clock');
     function updateClock() {
       if (clockElement) {
@@ -128,29 +534,28 @@
       }
     }
     setInterval(updateClock, 1000); updateClock();
-
-    // 2. LÓGICA DO TEMA (DARK/LIGHT)
     const themeToggle = document.getElementById('theme-checkbox');
     const body = document.body;
     const lightbulb = document.getElementById('lightbulb');
     const currentTheme = localStorage.getItem('theme');
     function applyTheme(theme) {
-        if (theme === 'light') { body.classList.add('light-mode'); themeToggle.checked = true; } 
-        else { body.classList.remove('light-mode'); themeToggle.checked = false; }
+        if (theme === 'light') { body.classList.add('light-mode'); if(themeToggle) themeToggle.checked = true; } 
+        else { body.classList.remove('light-mode'); if(themeToggle) themeToggle.checked = false; }
     }
     if (currentTheme) { applyTheme(currentTheme); }
     function animateBulb(mode) {
+        if (!lightbulb) return;
         lightbulb.className = ''; void lightbulb.offsetWidth;
         if (mode === 'light') { lightbulb.classList.add('animate-on'); } 
         else { lightbulb.classList.add('animate-off'); }
     }
-    themeToggle.addEventListener('change', () => {
-        let newTheme = themeToggle.checked ? 'light' : 'dark';
-        animateBulb(newTheme);
-        setTimeout(() => { applyTheme(newTheme); localStorage.setItem('theme', newTheme); }, 1000);
-    });
-
-    // 3. LÓGICA DA SIDEBAR
+    if (themeToggle) {
+        themeToggle.addEventListener('change', () => {
+            let newTheme = themeToggle.checked ? 'light' : 'dark';
+            animateBulb(newTheme);
+            setTimeout(() => { applyTheme(newTheme); localStorage.setItem('theme', newTheme); }, 1000);
+        });
+    }
     const menuToggleBtn = document.getElementById('menu-toggle-btn');
     const sidebar = document.getElementById('sidebar');
     const mainContainer = document.getElementById('main-container');
@@ -164,8 +569,6 @@
         menuToggleBtn.addEventListener('mouseleave', hideSidebarOnLeave);
         sidebar.addEventListener('mouseleave', hideSidebarOnLeave);
     }
-    
-    // 4. LÓGICA DA ANIMAÇÃO DO LOGO
     const animationContainer = document.getElementById('logo-animation-container');
     if (animationContainer) {
         const typingText = document.getElementById('typing-text');
@@ -183,95 +586,38 @@
             for (let i = fullText.length; i >= 0; i--) { face.style.transform = `translateX(${(1 - i / fullText.length) * 100}%)`; typingText.textContent = fullText.substring(0, i); await new Promise(res => setTimeout(res, 40)); }
             animationContainer.style.width = '0'; isAnimating = false;
         };
-        setInterval(runAnimationCycle, 20000);
+        setInterval(runAnimationCycle, 60000);
     }
-
-    // 5. NOVA LÓGICA DE PROMPT DE INATIVIDADE
     const promptContainer = document.getElementById('inactive-prompt-container');
     if (promptContainer) {
         const promptText = document.getElementById('inactive-prompt-text');
-        const phrases = [
-            // Frases Originais
-            "Ainda está aí?",
-            "O que acha de se mexer um pouco?",
-            "Um café cairia bem agora...",
-            "Ei, psiu!",
-            "Tudo certo por aqui?",
-            // Novas Frases Adicionadas
-            "Silêncio total... será que dormiu no teclado?",
-            "O tempo parou ou foi você que congelou?",
-            "Se fosse um jogo, já tinha aparecido a tela de pausa 😴",
-            "A cadeira está com saudade de você.",
-            "A energia caiu aí ou só a motivação?",
-            "Se ainda estiver por aí, pisque duas vezes!",
-            "A tela sente sua falta. Volta logo!",
-            "Essa pausa virou meditação?",
-            "A produtividade foi tomar água, você vai junto?",
-            "Vamos fingir que isso foi uma pausa estratégica.",
-            "Tem alguém aí ou só os ecos da última ação?",
-            "Esse silêncio me lembra quando o Wi-Fi cai...",
-            "Atenção: suspeita de modo fantasma ativado.",
-            "O universo está esperando sua próxima jogada.",
-            "Enquanto você pensa, os pixels tiram uma soneca.",
-            "Parece que o teclado entrou em férias coletivas.",
-            "Se tivesse um prêmio por ficar parado... você ganhava!",
-            "Ei, voltou? Ah não, foi só o vento.",
-            "Nem uma piscadinha? Estou começando a me preocupar.",
-            "A pausa tá tão longa que virou feriado.",
-            "O sistema detectou... saudades suas.",
-            "Quase chamei os bombeiros, achei que você tinha evaporado.",
-            "Nem parece que alguém estava digitando aqui há pouco.",
-            "A atividade sumiu mais rápido que as segundas-feiras felizes.",
-            "Não quero ser chato, mas... você esqueceu de mim?",
-            "Será que eu falo sozinho ou você está só disfarçando?",
-            "Se for suspense, já ganhou minha atenção!",
-            "Modo ‘estátua’ ativado com sucesso.",
-            "Só confirmando: você virou poeira cósmica ou foi só um cochilo?",
-            "Tá tudo bem aí? Até a barra de progresso se desesperou!",
-            // Frases Bônus
-            "Alô? Terra chamando...",
-            "O sistema está ocioso. Hora de um alongamento!",
-            "Até os servidores estão mais ativos que você.",
-            "Isso é uma pausa para o café ou uma hibernação?",
-            "Detectei um vácuo de atividade no seu setor."
-        ];
-        
+        const phrases = ["Ainda está aí?", "O que acha de se mexer um pouco?", "Um café cairia bem agora...", "Ei, psiu!", "Tudo certo por aqui?", "Silêncio total... será que dormiu no teclado?", "O tempo parou ou foi você que congelou?", "Se fosse um jogo, já tinha aparecido a tela de pausa 😴", "A cadeira está com saudade de você.", "A energia caiu aí ou só a motivação?", "Se ainda estiver por aí, pisque duas vezes!", "A tela sente sua falta. Volta logo!", "Essa pausa virou meditação?", "A produtividade foi tomar água, você vai junto?", "Vamos fingir que isso foi uma pausa estratégica.", "Tem alguém aí ou só os ecos da última ação?", "Esse silêncio me lembra quando o Wi-Fi cai...", "Atenção: suspeita de modo fantasma ativado.", "O universo está esperando sua próxima jogada.", "Enquanto você pensa, os pixels tiram uma soneca.", "Parece que o teclado entrou em férias coletivas.", "Se tivesse um prêmio por ficar parado... você ganhava!", "Ei, voltou? Ah não, foi só o vento.", "Nem uma piscadinha? Estou começando a me preocupar.", "A pausa tá tão longa que virou feriado.", "O sistema detectou... saudades suas.", "Quase chamei os bombeiros, achei que você tinha evaporado.", "Nem parece que alguém estava digitando aqui há pouco.", "A atividade sumiu mais rápido que as segundas-feiras felizes.", "Não quero ser chato, mas... você esqueceu de mim?", "Será que eu falo sozinho ou você está só disfarçando?", "Se for suspense, já ganhou minha atenção!", "Modo ‘estátua’ ativado com sucesso.", "Só confirmando: você virou poeira cósmica ou foi só um cochilo?", "Tá tudo bem aí? Até a barra de progresso se desesperou!", "Alô? Terra chamando...", "O sistema está ocioso. Hora de um alongamento!", "Até os servidores estão mais ativos que você.", "Isso é uma pausa para o café ou uma hibernação?", "Detectei um vácuo de atividade no seu setor."];
         let inactivityTimer;
         let promptIsVisible = false;
-        const INACTIVITY_TIME = 10000; // 10 segundos
-
+        const INACTIVITY_TIME = 120000; 
         const showPrompt = () => {
             if (promptIsVisible) return;
             promptIsVisible = true;
-            
-            // Escolhe uma frase aleatória
-            const randomIndex = Math.floor(Math.random() * phrases.length);
-            promptText.textContent = phrases[randomIndex];
-
+            promptText.textContent = phrases[Math.floor(Math.random() * phrases.length)];
             promptContainer.classList.remove('hiding');
             promptContainer.classList.add('visible');
         };
-
         const hidePrompt = () => {
             if (!promptIsVisible) return;
             promptIsVisible = false;
-
             promptContainer.classList.add('hiding');
-            // Remove a classe 'visible' após a animação de saída para resetar o estado
-            setTimeout(() => {
-                 promptContainer.classList.remove('visible');
-            }, 500); // Duração da animação de saída
+            setTimeout(() => { promptContainer.classList.remove('visible'); }, 500); 
         };
-        
         const resetInactivityTimer = () => {
             hidePrompt();
             clearTimeout(inactivityTimer);
             inactivityTimer = setTimeout(showPrompt, INACTIVITY_TIME);
         };
-
         window.addEventListener('mousedown', resetInactivityTimer);
         resetInactivityTimer();
     }
+    const settingsBtn = document.getElementById('settings-btn');
+    if(settingsBtn) { settingsBtn.addEventListener('click', showSettingsModal); }
   });
 </script>
 

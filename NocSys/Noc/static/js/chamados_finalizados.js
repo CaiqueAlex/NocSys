@@ -32,7 +32,9 @@ async function loadChamadosFinalizados() {
 
     if (chamados.length === 0) {
       content.innerHTML = `${headerHtml}<p>Nenhum chamado finalizado encontrado.</p>`;
-      document.getElementById('btnRecarregarChamadosFinalizados').onclick = loadChamadosFinalizados;
+      if (document.getElementById('btnRecarregarChamadosFinalizados')) {
+          document.getElementById('btnRecarregarChamadosFinalizados').onclick = loadChamadosFinalizados;
+      }
       return;
     }
 
@@ -44,7 +46,7 @@ async function loadChamadosFinalizados() {
       agrupado[cod].push(c);
     });
 
-    const idsOrdenados = Object.keys(agrupado).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0)); // Mais recentes primeiro
+    const idsOrdenados = Object.keys(agrupado).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
 
     let chamadosHtml = '<div style="display:flex;flex-direction:column;gap:12px;">';
 
@@ -52,15 +54,21 @@ async function loadChamadosFinalizados() {
       const slots = agrupado[codigo].sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
       const primeiro = slots[0];
       const ultimo = slots[slots.length - 1];
-      const contato  = primeiro.contact_name || (primeiro.conversation_key && primeiro.conversation_key.split('|')[0]) || 'Desconhecido';
       const aberto = primeiro.criado_em || '';
       const encerrado = ultimo.criado_em || '';
+      const resumo = ultimo.resumo || '';
+      const semSuporte = !ultimo.suporte;
+
+      const alertaHtml = semSuporte 
+        ? '<span class="chamado-alerta alert-blue" title="Chamado sem atribuição">❗</span>'
+        : '';
 
       chamadosHtml += `
-        <div class="chamado">
+        <div class="chamado" id="chamado-${escapeHtml(codigo)}">
           <div class="chamado-header" onclick="toggleFinalizadoDetalhes(this.parentNode)">
             <div class="chamado-info">
-              <strong>#${escapeHtml(codigo)} &bull; ${escapeHtml(contato)}</strong>
+              <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(codigo)}</strong>
+              <span class="chamado-resumo" title="${escapeHtml(resumo)}">${escapeHtml(resumo)}</span>
               <div class="chamado-info-dates">
                 <span>Aberto: ${niceDate(aberto)}</span>
                 <span>Encerrado: ${niceDate(encerrado)}</span>
@@ -68,6 +76,8 @@ async function loadChamadosFinalizados() {
             </div>
             <div class="chamado-actions">
                 <button class="botao-mostrar">Mostrar</button>
+                <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(codigo)}')">✏️</button>
+                <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(codigo)}')">🗑️</button>
             </div>
           </div>
           <div class="chamado-detalhes" data-codigo="${codigo}"></div>
@@ -112,7 +122,7 @@ async function toggleFinalizadoDetalhes(chamadoElement) {
       const data = new Date(m.criado_em);
       const dataStr = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       const isSuporte = m.username === '5514997642104@c.us';
-      const nomeExibido = isSuporte ? 'Suporte' : (m.contact_name || 'Cliente');
+      const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
       convo += `
         <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
             <div class="mensagem-header">
@@ -130,11 +140,14 @@ async function toggleFinalizadoDetalhes(chamadoElement) {
       <div class="detalhes-suporte-container">
         <h3>Detalhes do Suporte</h3>
         <div class="detalhes-grid">
-          <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || '')}" />
-          <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || '')}" />
-          <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || '')}</textarea>
-          <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || '')}" />
-          <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || '')}" />
+          <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || 'N/A')}" />
+          <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || 'N/A')}" />
+          <span>Setor:</span> <input readonly value="${escapeHtml(ultimo.setor || 'N/A')}" />
+          <span>Resumo:</span> <input readonly value="${escapeHtml(ultimo.resumo || 'N/A')}" />
+          <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || 'N/A')}</textarea>
+          <span>Solução:</span> <textarea readonly rows="2">${escapeHtml(ultimo.solucao || 'N/A')}</textarea>
+          <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || 'N/A')}" />
+          <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || 'N/A')}" />
         </div>
       </div>
     `;

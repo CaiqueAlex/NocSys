@@ -32,7 +32,9 @@ async function loadAbertos() {
 
     if (chamados.length === 0) {
       content.innerHTML = `${headerHtml}<p>Nenhum chamado em aberto.</p>`;
-      document.getElementById('btnRecarregarChamadosAbertos').onclick = loadAbertos;
+      if(document.getElementById('btnRecarregarChamadosAbertos')) {
+        document.getElementById('btnRecarregarChamadosAbertos').onclick = loadAbertos;
+      }
       return;
     }
 
@@ -51,20 +53,30 @@ async function loadAbertos() {
     for (const codigo of idsOrdenados) {
       const slots = agrupado[codigo].sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
       const primeiro = slots[0];
-      const contato  = primeiro.contact_name || (primeiro.conversation_key && primeiro.conversation_key.split('|')[0]) || 'Desconhecido';
+      const ultimo = slots[slots.length - 1];
       const aberto = primeiro.criado_em || '';
+      const resumo = ultimo.resumo || '';
+      const semSuporte = !ultimo.suporte;
+
+      const alertaHtml = semSuporte 
+        ? '<span class="chamado-alerta alert-gray" title="Chamado sem atribuição">❗</span>' 
+        : '';
 
       chamadosHtml += `
-        <div class="chamado">
+        <div class="chamado" id="chamado-${escapeHtml(codigo)}">
           <div class="chamado-header" onclick="toggleAbertoDetalhes(this.parentNode)">
             <div class="chamado-info">
-              <strong>#${escapeHtml(codigo)} &bull; ${escapeHtml(contato)}</strong>
+              <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(codigo)}</strong>
+              <span class="chamado-resumo" title="${escapeHtml(resumo)}">${escapeHtml(resumo)}</span>
               <div class="chamado-info-dates">
                 <span>Aberto: ${niceDate(aberto)}</span>
               </div>
             </div>
             <div class="chamado-actions">
                 <button class="botao-mostrar">Mostrar</button>
+                <button class="botao-finalizar" title="Finalizar Chamado" onclick="event.stopPropagation(); finalizarChamado('${escapeHtml(codigo)}')">✔️</button>
+                <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(codigo)}')">✏️</button>
+                <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(codigo)}')">🗑️</button>
             </div>
           </div>
           <div class="chamado-detalhes" data-codigo="${codigo}"></div>
@@ -93,7 +105,7 @@ async function toggleAbertoDetalhes(chamadoElement) {
   }
 
   btn.innerText = '...';
-  detalhes.style.display = 'block'; // Mostra para o usuário ver o carregamento
+  detalhes.style.display = 'block'; 
   detalhes.innerHTML = '<p>Carregando detalhes...</p>';
   
   const codigo = detalhes.getAttribute('data-codigo');
@@ -109,7 +121,7 @@ async function toggleAbertoDetalhes(chamadoElement) {
       const data = new Date(m.criado_em);
       const dataStr = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       const isSuporte = m.username === '5514997642104@c.us';
-      const nomeExibido = isSuporte ? 'Suporte' : (m.contact_name || 'Cliente');
+      const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
       convo += `
         <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
             <div class="mensagem-header">
@@ -121,20 +133,6 @@ async function toggleAbertoDetalhes(chamadoElement) {
       `;
     });
     convo += `</div>`;
-
-    const ultimo = msgs[msgs.length - 1] || {};
-    convo += `
-      <div class="detalhes-suporte-container">
-        <h3>Detalhes do Suporte</h3>
-        <div class="detalhes-grid">
-          <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || '')}" />
-          <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || '')}" />
-          <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || '')}</textarea>
-          <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || '')}" />
-          <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || '')}" />
-        </div>
-      </div>
-    `;
 
     detalhes.innerHTML = convo;
     btn.innerText = 'Esconder';

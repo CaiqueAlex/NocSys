@@ -49,4 +49,14 @@ python manage.py migrate
 
 3. rode o servidor para acesso na rede
 
-python manage.py runserver 0.0.0.0:8000
+python manage.py runserver 0.0.0.0:80
+
+Funcionalidades do Bot <---
+
+Ao cadastrar um numero no site, após 5 minutos ele será adicionado no banco de dados e na API, fazendo assim a proxima mensagem dele mostrar a mensagem automatica de chamado.
+
+Caso precise esclarecer duvida com um usuario cadastrado sem gravar chamados nem nada, use /// para pausar o bot e logo após /// para despausar, use com cautela !!!
+
+se quiser gravar de forma manual, use o /s, e para finalizar o chamado Digite "Chamado Encerrado!", dessa exata maneira ou aguarde 15 minutos para o fechamento automatico do chamado.
+
+Caso o usuario escolha a opção 2 "Outros" para esclarecer duvida, pausara o bot, use /. para despausa-lo.

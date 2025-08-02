@@ -7,17 +7,20 @@
 <title>NocSys</title>
 <link rel="icon" type="image/png" href="{% static 'css/Nocsyslogo.png' %}">
 <link rel="stylesheet" href="{% static 'css/main.css' %}" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
-<!-- BARRA SUPERIOR E ANIMAÇÃO - Visível em todas as telas -->
+<!-- BARRA SUPERIOR E ANIMAÇÃO -->
 <div class="top-bar fade-slide-down">
     <div class="top-bar-left">
+        {% if user.is_authenticated %}
         <button id="menu-toggle-btn" class="menu-toggle-btn" title="Alternar menu">
             <span></span>
             <span></span>
             <span></span>
         </button>
+        {% endif %}
         <div class="logo-login">NocSys</div>
         {% if user.is_authenticated %}
         <div id="logo-animation-container">
@@ -31,7 +34,9 @@
         {% endif %}
     </div>
     <div class="top-bar-right">
+        {% if user.is_authenticated %}
         <button id="settings-btn" title="Configurações">⚙️</button>
+        {% endif %}
         <div class="clock" id="clock">--:--:--</div>
         <div class="theme-switch-wrapper">
             <label class="theme-switch" for="theme-checkbox">
@@ -45,9 +50,8 @@
     <div id="lightbulb">💡</div>
 </div>
 
-
 {% if user.is_authenticated %}
-  <!-- INÍCIO DO CONTEÚDO DA HOME (AUTENTICADO) -->
+  <!-- CONTEÚDO DA HOME (AUTENTICADO) -->
   <div id="csrf-container" style="display: none;">{% csrf_token %}</div>
   <div class="main-container" id="main-container">
       <div class="sidebar" id="sidebar">
@@ -63,13 +67,12 @@
         </ul>
       </div>
       <div class="content" id="content-area">
-        <!-- O conteúdo será carregado dinamicamente aqui -->
+          <!-- O conteúdo será carregado aqui -->
       </div>
   </div>
-  <!-- FIM DO CONTEÚDO DA HOME -->
 
 {% else %}
-  <!-- INÍCIO DO CONTEÚDO DE LOGIN (NÃO AUTENTICADO) -->
+  <!-- CONTEÚDO DE LOGIN (NÃO AUTENTICADO) -->
   <div class="login-page-container fade-zoom-in">
     <div class="login-box fade-zoom-in" id="login-box">
       <h2 class="titlelogin">NocSys - Login</h2>
@@ -84,18 +87,15 @@
       </form>
     </div>
   </div>
-  <!-- FIM DO CONTEÚDO DE LOGIN -->
 {% endif %}
 
-<!-- Animação de Inatividade -->
+<!-- MODAIS -->
 <div id="inactive-prompt-container">
     <div class="speech-bubble">
         <p id="inactive-prompt-text"></p>
     </div>
     <div class="prompt-character">🤔</div>
 </div>
-
-<!-- MODAL DE CONFIRMAÇÃO DE EXCLUSÃO -->
 <div id="confirm-delete-backdrop" class="modal-backdrop hidden">
     <div id="confirm-delete-box" class="modal-box">
         <div id="confirm-initial-view">
@@ -110,8 +110,6 @@
         </div>
     </div>
 </div>
-
-<!-- MODAL DE CONFIRMAÇÃO DE FINALIZAÇÃO -->
 <div id="confirm-finalize-backdrop" class="modal-backdrop hidden">
     <div id="confirm-finalize-box" class="modal-box">
         <div id="confirm-initial-view-finalize">
@@ -126,12 +124,9 @@
         </div>
     </div>
 </div>
-
-<!-- MODAL DE EDIÇÃO DE CHAMADO -->
 <div id="edit-chamado-backdrop" class="modal-backdrop hidden">
     <div id="edit-chamado-box" class="modal-box">
         <button id="edit-chamado-close-btn" class="modal-close-btn">&times;</button>
-        
         <div id="edit-chamado-form-view">
             <h2>Editar Chamado #<span id="edit-chamado-codigo"></span></h2>
             <form id="edit-chamado-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
@@ -142,7 +137,7 @@
                         <button type="button" id="assign-to-me-btn" title="Atribuir a mim">👤</button>
                     </div>
                     <span>Cliente:</span> <input name="cliente" readonly />
-                    <span>Setor:</span> <input name="setor" />
+                    <span>Setor:</span> <input name="setor" readonly />
                     <span>Resumo:</span> <input name="resumo" />
                     <span>Problema:</span> <textarea name="problema" rows="3"></textarea>
                     <span>Solução:</span> <textarea name="solucao" rows="3"></textarea>
@@ -159,14 +154,11 @@
                 </div>
             </form>
         </div>
-        
         <div id="edit-chamado-success-view" class="hidden">
             <p style="font-size: 1.5rem; text-align: center;">Alterações salvas! ✅</p>
         </div>
     </div>
 </div>
-
-<!-- MODAL DE CONFIGURAÇÕES -->
 <div id="settings-backdrop" class="modal-backdrop hidden">
     <div id="settings-box" class="modal-box">
         <div class="settings-container fade-in">
@@ -174,13 +166,12 @@
                 <h3>Configurações</h3>
                 <ul>
                     <li><a href="#" class="settings-nav-link active" data-target="settings-view-user">👤 Usuário</a></li>
-                    <li><a href="#" class="settings-nav-link" data-target="settings-view-export">📤 Exportar XML</a></li>
+                    <li><a href="#" class="settings-nav-link" data-target="settings-view-clientes">👥 Clientes</a></li>
+                    <li><a href="#" class="settings-nav-link" data-target="settings-view-graficos">📈 Gráficos</a></li>
                 </ul>
             </div>
             <div class="settings-content">
                 <button id="settings-close-btn" class="modal-close-btn">&times;</button>
-                
-                <!-- View do Usuário -->
                 <div id="settings-view-user" class="settings-view">
                     <h2>Detalhes do Usuário</h2>
                     <div class="user-details-grid">
@@ -192,33 +183,157 @@
                         <span>Chamados Finalizados:</span> <strong id="settings-finalizados-count">Carregando...</strong>
                     </div>
                 </div>
-
-                <!-- View de Exportação -->
-                <div id="settings-view-export" class="settings-view hidden">
-                    <h2>Exportar Dados</h2>
-                    <p>Funcionalidade em desenvolvimento (WIP). Em breve você poderá exportar seus dados em formato XML.</p>
+                <div id="settings-view-clientes" class="settings-view hidden">
+                    <div class="client-view-header">
+                        <h2>Gerenciar Clientes</h2>
+                        <button id="add-client-btn" class="btn-add-client">➕ Adicionar Cliente</button>
+                    </div>
+                    <div class="client-table-container">
+                        <table id="client-table">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>Número</th>
+                                    <th>Setor</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="client-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id="settings-view-graficos" class="settings-view hidden">
+                    <h2>Gráficos de Desempenho</h2>
+                    <div id="status-chart-container" class="chart-box">
+                        <canvas id="status-pie-chart"></canvas>
+                    </div>
+                    <div id="status-chart-legend" class="chart-legend"></div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+<div id="cliente-modal-backdrop" class="modal-backdrop hidden">
+    <div id="cliente-modal-box" class="modal-box">
+        <button id="cliente-modal-close-btn" class="modal-close-btn">&times;</button>
+        <h2 id="cliente-modal-title">Adicionar Novo Cliente</h2>
+        <form id="cliente-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
+            <input type="hidden" name="id">
+            <div class="detalhes-grid">
+                <span>Nome:</span>
+                <input name="nome" placeholder="Nome completo do cliente" required />
+                <span>Número:</span>
+                <input name="numero" placeholder="Ex: 5514912345678" pattern="[0-9]{13}" title="Apenas números, 13 dígitos (55+DDD+Número)" required />
+                <span>Setor:</span>
+                <input name="setor" placeholder="Setor do cliente (Opcional)" />
+            </div>
+            <div class="modal-buttons">
+                <button type="submit" id="cliente-form-save-btn">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- NOVO MODAL: FULLSCREEN DA CONVERSA -->
+<div id="fullscreen-convo-backdrop" class="modal-backdrop hidden">
+    <div id="fullscreen-convo-box" class="modal-box">
+        <button id="fullscreen-convo-close-btn" class="modal-close-btn">&times;</button>
+        <div id="fullscreen-convo-content">
+            <!-- O conteúdo da conversa será clonado aqui -->
+        </div>
+    </div>
+</div>
 
 
-<!-- SCRIPTS GERAIS -->
+<!-- SCRIPTS -->
 <script src="{% static 'js/dashboard.js' %}"></script>
 <script src="{% static 'js/abertos.js' %}"></script>
 <script src="{% static 'js/chamados_finalizados.js' %}"></script>
 <script src="{% static 'js/config.js' %}"></script>
 
 <script>
-  // --- FUNÇÃO PARA PEGAR O CSRF TOKEN ---
+  // --- FUNÇÕES GLOBAIS AUXILIARES ---
+
+  function escapeHtml(text) {
+    if (typeof text !== 'string') return '';
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+  }
+
+  function niceDate(dateString) {
+    if (!dateString) return 'Data inválida';
+    const date = new Date(dateString);
+    if (isNaN(date)) return 'Data inválida';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  }
+
+  function renderMessageContent(m) {
+    let content = '';
+    const textContent = m.text && m.msg_type !== 'document' ? `<p class="media-caption">${escapeHtml(m.text)}</p>` : '';
+
+    switch (m.msg_type) {
+        case 'image':
+            content = `<div class="media-container"><img src="${m.media_file}" alt="Imagem enviada" loading="lazy"></div>${textContent}`;
+            break;
+        case 'video':
+            content = `<div class="media-container"><video src="${m.media_file}" controls></video></div>${textContent}`;
+            break;
+        case 'audio':
+            content = `<audio src="${m.media_file}" controls></audio>${textContent}`;
+            break;
+        case 'document':
+            content = `<a href="${m.media_file}" class="document-link" download>
+                           <span class="document-icon">📄</span>
+                           <span class="document-name">${escapeHtml(m.text || 'Documento')}</span>
+                       </a>`;
+            break;
+        case 'text':
+        default:
+            content = `<p>${escapeHtml(m.text || '[Mensagem vazia]')}</p>`;
+            break;
+    }
+    return content;
+  }
+
   function getCsrfToken() {
-    // Busca o token no container para usuários logados, ou no form de login para não logados.
     const csrfInput = document.querySelector('#csrf-container [name="csrfmiddlewaretoken"]') || document.querySelector('#login-form [name="csrfmiddlewaretoken"]');
     return csrfInput ? csrfInput.value : '';
   }
 
-  // --- LÓGICA DO MODAL DE EDIÇÃO (CENTRALIZADA) ---
+  // NOVA FUNÇÃO: Mostrar modal de tela cheia
+  function showConversationFullscreen(convoContainer) {
+      const backdrop = document.getElementById('fullscreen-convo-backdrop');
+      const contentBox = document.getElementById('fullscreen-convo-content');
+      const closeBtn = document.getElementById('fullscreen-convo-close-btn');
+
+      if (!backdrop || !contentBox || !closeBtn || !convoContainer) return;
+      
+      // Limpa conteúdo anterior e clona o novo
+      contentBox.innerHTML = '';
+      const clonedContent = convoContainer.cloneNode(true);
+      contentBox.appendChild(clonedContent);
+
+      const hide = () => backdrop.classList.add('hidden');
+      
+      closeBtn.onclick = hide;
+      backdrop.onclick = (e) => {
+          if (e.target === backdrop) {
+              hide();
+          }
+      };
+
+      backdrop.classList.remove('hidden');
+  }
+
   async function showEditModal(codigo) {
     const backdrop = document.getElementById('edit-chamado-backdrop');
     const formView = document.getElementById('edit-chamado-form-view');
@@ -340,9 +455,6 @@
     assignBtn.addEventListener('click', assignToMe);
   }
 
-  // --- LÓGICA DOS MODAIS DE CONFIRMAÇÃO ---
-
-  // Função genérica para animação de escrita
   function typeWriter(element, text, speed) {
       return new Promise((resolve) => {
           let i = 0;
@@ -363,14 +475,14 @@
       });
   }
 
-  // Modal de Exclusão
   const deletePhrases = [
-      "Tem certeza? 😕 Apagar o chamado #{codigo} é um caminho sem volta... tipo meia perdida na máquina de lavar.",
-      "Certeza mesmo? 🧐 O chamado #{codigo} será enviado para o vácuo cósmico, de onde nada retorna.",
-      "Última chance! 😬 Clicar em 'Sim' vai deletar o chamado #{codigo} mais rápido que um piscar de olhos.",
-      "Pense bem... O histórico do chamado #{codigo} está prestes a virar poeira digital. Continuar?",
-      "Alerta! 🚨 O chamado #{codigo} será permanentemente excluído. Não temos um 'desfazer' para isso."
-  ];
+        "Tem certeza? 😕 Apagar o chamado #{codigo} é um caminho sem volta... tipo meia perdida na máquina de lavar.",
+        "Certeza mesmo? 🧐 O chamado #{codigo} será enviado para o vácuo cósmico, de onde nada retorna.",
+        "Última chance! 😬 Clicar em 'Sim' vai deletar o chamado #{codigo} mais rápido que um piscar de olhos.",
+        "Pense bem... O histórico do chamado #{codigo} está prestes a virar poeira digital. Continuar?",
+        "Alerta! 🚨 O chamado #{codigo} será permanentemente excluído. Não temos um 'desfazer' para isso."
+    ];
+
   function showDeleteConfirmModal(codigo) {
       const backdrop = document.getElementById('confirm-delete-backdrop');
       const title = document.getElementById('confirm-delete-title');
@@ -432,12 +544,13 @@
       }
   }
 
-  // Modal de Finalização
   const finalizePhrases = [
-    "Pronto para encerrar o chamado #{codigo}? 🚀 O cliente agradece!",
-    "Finalizar o chamado #{codigo}? Missão (quase) cumprida. Só falta seu clique.",
-    "Bora dar baixa no chamado #{codigo}? ✔️ Mais um pra conta!",
-  ];
+      "Pronto para encerrar o chamado #{codigo}? 🚀 O cliente agradece!",
+      "Finalizar o chamado #{codigo}? Missão (quase) cumprida. Só falta seu clique.",
+      "Bora dar baixa no chamado #{codigo}? ✔️ Mais um pra conta!",
+      "Enviar o chamado #{codigo} para a prateleira de 'problemas resolvidos'?",
+      "Este chamado lutou o bom combate. Hora do descanso no arquivo de finalizados. Fechar o #{codigo}?"
+    ];
   function showFinalizeConfirmModal(codigo) {
       const backdrop = document.getElementById('confirm-finalize-backdrop');
       const title = document.getElementById('confirm-finalize-title');
@@ -504,25 +617,35 @@
       }
   }
 
-
-  // Scripts da Home Autenticada
-  if (document.getElementById("menu-chamados-abertos")) {
-    document.getElementById("menu-dashboard").addEventListener("click", e => { e.preventDefault(); loadDashboard(); });
-    document.getElementById("menu-chamados-abertos").addEventListener("click", e => { e.preventDefault(); loadAbertos(); });
-    document.getElementById("menu-chamados-finalizados").addEventListener("click", e => { e.preventDefault(); loadChamadosFinalizados(); });
-  }
-
-  // Script do Login
-  const form = document.getElementById('login-form');
-  if (form) {
-    form.addEventListener('submit', function (e) {
-      e.preventDefault(); document.body.classList.add('fade-zoom-out'); setTimeout(() => form.submit(), 400);
-    });
-  }
-
-  // Scripts da Barra Superior e Sidebar
   document.addEventListener('DOMContentLoaded', () => {
-    if (document.querySelector('.main-container')) { loadDashboard(); }
+    
+    {% if user.is_authenticated %}
+      document.getElementById("menu-dashboard").addEventListener("click", (e) => { e.preventDefault(); loadDashboard(); });
+      document.getElementById("menu-chamados-abertos").addEventListener("click", (e) => { e.preventDefault(); loadAbertos(); });
+      document.getElementById("menu-chamados-finalizados").addEventListener("click", (e) => { e.preventDefault(); loadChamadosFinalizados(); });
+      
+      loadDashboard();
+
+      // Event listener para o botão de tela cheia
+      document.getElementById('content-area').addEventListener('click', function(e) {
+          if (e.target.matches('.btn-fullscreen')) {
+              e.stopPropagation();
+              const convoContainer = e.target.closest('.conversa-wrapper').querySelector('.conversa-container');
+              showConversationFullscreen(convoContainer);
+          }
+      });
+      
+    {% else %}
+      const loginForm = document.getElementById('login-form');
+      if (loginForm) {
+        loginForm.addEventListener('submit', function (e) {
+          e.preventDefault(); 
+          document.body.classList.add('fade-zoom-out'); 
+          setTimeout(() => loginForm.submit(), 400);
+        });
+      }
+    {% endif %}
+
     const clockElement = document.getElementById('clock');
     function updateClock() {
       if (clockElement) {
@@ -533,7 +656,9 @@
         clockElement.textContent = `${hours}:${minutes}:${seconds}`;
       }
     }
-    setInterval(updateClock, 1000); updateClock();
+    setInterval(updateClock, 1000); 
+    updateClock();
+
     const themeToggle = document.getElementById('theme-checkbox');
     const body = document.body;
     const lightbulb = document.getElementById('lightbulb');
@@ -543,55 +668,53 @@
         else { body.classList.remove('light-mode'); if(themeToggle) themeToggle.checked = false; }
     }
     if (currentTheme) { applyTheme(currentTheme); }
+
     function animateBulb(mode) {
         if (!lightbulb) return;
-        lightbulb.className = ''; void lightbulb.offsetWidth;
+        lightbulb.className = ''; 
+        void lightbulb.offsetWidth;
         if (mode === 'light') { lightbulb.classList.add('animate-on'); } 
         else { lightbulb.classList.add('animate-off'); }
     }
     if (themeToggle) {
         themeToggle.addEventListener('change', () => {
             let newTheme = themeToggle.checked ? 'light' : 'dark';
+            
             animateBulb(newTheme);
-            setTimeout(() => { applyTheme(newTheme); localStorage.setItem('theme', newTheme); }, 1000);
+            
+            setTimeout(() => { 
+                applyTheme(newTheme); 
+                localStorage.setItem('theme', newTheme); 
+            }, 500);
         });
     }
+
     const menuToggleBtn = document.getElementById('menu-toggle-btn');
     const sidebar = document.getElementById('sidebar');
     const mainContainer = document.getElementById('main-container');
     if (menuToggleBtn && sidebar && mainContainer) {
         let hoverTimeout;
-        menuToggleBtn.addEventListener('click', () => { sidebar.classList.toggle('sidebar-pinned'); mainContainer.classList.toggle('content-shifted'); });
-        const showSidebarOnHover = () => { clearTimeout(hoverTimeout); if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.add('sidebar-visible'); mainContainer.classList.add('content-shifted'); } };
-        const hideSidebarOnLeave = () => { hoverTimeout = setTimeout(() => { if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.remove('sidebar-visible'); mainContainer.classList.remove('content-shifted'); } }, 300); };
+        const showSidebarOnHover = () => { 
+            clearTimeout(hoverTimeout);
+            sidebar.classList.add('sidebar-visible');
+            mainContainer.classList.add('content-shifted'); 
+        };
+        const hideSidebarOnLeave = () => { 
+            hoverTimeout = setTimeout(() => {
+                sidebar.classList.remove('sidebar-visible');
+                mainContainer.classList.remove('content-shifted');
+            }, 300);
+        };
         menuToggleBtn.addEventListener('mouseenter', showSidebarOnHover);
         sidebar.addEventListener('mouseenter', showSidebarOnHover);
         menuToggleBtn.addEventListener('mouseleave', hideSidebarOnLeave);
         sidebar.addEventListener('mouseleave', hideSidebarOnLeave);
     }
-    const animationContainer = document.getElementById('logo-animation-container');
-    if (animationContainer) {
-        const typingText = document.getElementById('typing-text');
-        const face = document.getElementById('face-emoji');
-        const fullText = "Network Operation Center System"; 
-        let isAnimating = false;
-        const runAnimationCycle = async () => {
-            if (isAnimating) return;
-            isAnimating = true;
-            animationContainer.style.width = 'auto'; typingText.textContent = '';
-            for (let i = 0; i < fullText.length; i++) { typingText.textContent += fullText[i]; await new Promise(res => setTimeout(res, 80)); }
-            face.classList.add('animate-face');
-            await new Promise(res => setTimeout(res, 5000));
-            face.classList.remove('animate-face');
-            for (let i = fullText.length; i >= 0; i--) { face.style.transform = `translateX(${(1 - i / fullText.length) * 100}%)`; typingText.textContent = fullText.substring(0, i); await new Promise(res => setTimeout(res, 40)); }
-            animationContainer.style.width = '0'; isAnimating = false;
-        };
-        setInterval(runAnimationCycle, 60000);
-    }
+    
     const promptContainer = document.getElementById('inactive-prompt-container');
     if (promptContainer) {
         const promptText = document.getElementById('inactive-prompt-text');
-        const phrases = ["Ainda está aí?", "O que acha de se mexer um pouco?", "Um café cairia bem agora...", "Ei, psiu!", "Tudo certo por aqui?", "Silêncio total... será que dormiu no teclado?", "O tempo parou ou foi você que congelou?", "Se fosse um jogo, já tinha aparecido a tela de pausa 😴", "A cadeira está com saudade de você.", "A energia caiu aí ou só a motivação?", "Se ainda estiver por aí, pisque duas vezes!", "A tela sente sua falta. Volta logo!", "Essa pausa virou meditação?", "A produtividade foi tomar água, você vai junto?", "Vamos fingir que isso foi uma pausa estratégica.", "Tem alguém aí ou só os ecos da última ação?", "Esse silêncio me lembra quando o Wi-Fi cai...", "Atenção: suspeita de modo fantasma ativado.", "O universo está esperando sua próxima jogada.", "Enquanto você pensa, os pixels tiram uma soneca.", "Parece que o teclado entrou em férias coletivas.", "Se tivesse um prêmio por ficar parado... você ganhava!", "Ei, voltou? Ah não, foi só o vento.", "Nem uma piscadinha? Estou começando a me preocupar.", "A pausa tá tão longa que virou feriado.", "O sistema detectou... saudades suas.", "Quase chamei os bombeiros, achei que você tinha evaporado.", "Nem parece que alguém estava digitando aqui há pouco.", "A atividade sumiu mais rápido que as segundas-feiras felizes.", "Não quero ser chato, mas... você esqueceu de mim?", "Será que eu falo sozinho ou você está só disfarçando?", "Se for suspense, já ganhou minha atenção!", "Modo ‘estátua’ ativado com sucesso.", "Só confirmando: você virou poeira cósmica ou foi só um cochilo?", "Tá tudo bem aí? Até a barra de progresso se desesperou!", "Alô? Terra chamando...", "O sistema está ocioso. Hora de um alongamento!", "Até os servidores estão mais ativos que você.", "Isso é uma pausa para o café ou uma hibernação?", "Detectei um vácuo de atividade no seu setor."];
+        const phrases = ["Ainda está aí?", "O que acha de se mexer um pouco?", "Um café cairia bem agora...", "Ei, psiu!", "Tudo certo por aqui?"];
         let inactivityTimer;
         let promptIsVisible = false;
         const INACTIVITY_TIME = 120000; 
@@ -614,10 +737,14 @@
             inactivityTimer = setTimeout(showPrompt, INACTIVITY_TIME);
         };
         window.addEventListener('mousedown', resetInactivityTimer);
+        window.addEventListener('keydown', resetInactivityTimer);
         resetInactivityTimer();
     }
+
     const settingsBtn = document.getElementById('settings-btn');
-    if(settingsBtn) { settingsBtn.addEventListener('click', showSettingsModal); }
+    if(settingsBtn) { 
+        settingsBtn.addEventListener('click', showSettingsModal); 
+    }
   });
 </script>
 

@@ -2,129 +2,299 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const axios = require('axios');
 
 const OPERADOR = '5514997642104@c.us';
+const API_BASE_URL = 'http://localhost:80';
+const INACTIVITY_TIMEOUT = 900 * 1000;
+
 const conversationState = {};
+let specialNumbers = [];
+
+async function fetchSpecialNumbers() {
+    try {
+        console.log('🔄 Buscando números de clientes...');
+        const response = await axios.get(`${API_BASE_URL}/api/clientes/numeros/`);
+        specialNumbers = response.data;
+        console.log(`✅ Números de clientes atualizados: ${specialNumbers.length} contatos carregados.`);
+    } catch (error) {
+        console.error('❌ Erro ao buscar números de clientes da API:', error.message);
+    }
+}
 
 function getBaseKey(u1, u2) {
     return [u1, u2].sort().join('|');
 }
 
 wppconnect.create({
-    browserArgs: ['--no-sandbox'],
-    executablePath: '/usr/bin/google-chrome',
+    session: 'noc-bot',
+    catchQR: (base64Qr, asciiQR) => { console.log(asciiQR); },
+    statusFind: (statusSession, session) => { console.log('Status:', statusSession, 'Session:', session); },
     headless: false,
-    autoClose: false,
+    devtools: false,
+    useChrome: true,
+    debug: false,
+    logQR: true,
+    browserArgs: ['--no-sandbox'],
+    autoClose: 90000,
+    puppeteerOptions: {},
+    disableWelcome: true,
 })
 .then(client => start(client))
 .catch(console.error);
 
+function resetInactivityTimer(client, contato) {
+    const currentState = conversationState[contato];
+    if (currentState && currentState.timeoutId) {
+        clearTimeout(currentState.timeoutId);
+    }
+    if (currentState) {
+        currentState.timeoutId = setTimeout(async () => {
+            if (currentState.stage === 'recording') {
+                console.log(`⏳ Conversa com ${contato} inativa. Finalizando gravação...`);
+                await finalizarGravacao(client, contato, true);
+                delete conversationState[contato];
+            }
+        }, INACTIVITY_TIMEOUT);
+    }
+}
+
 async function start(client) {
+    await fetchSpecialNumbers();
+    setInterval(fetchSpecialNumbers, 5 * 60 * 1000);
     console.log('✅ Bot iniciado. Aguardando mensagens...');
 
     client.onAnyMessage(async (msg) => {
+        console.log(`\n--- [${new Date().toLocaleString()}] ---`);
+        console.log(`📨 Mensagem recebida: De=${msg.from}, Para=${msg.to}, Tipo=${msg.type}`);
+        
         try {
-            if (!msg?.body) return;
-            const { from, to, body } = msg;
-            const texto = body.trim();
+            if (msg.isGroupMsg || !msg.from) return;
+
+            const { from, to, type, mimetype, filename } = msg;
+
+            if (type === 'sticker') {
+                console.log(`🚫 Figurinha de ${from} ignorada.`);
+                return;
+            }
 
             let contato;
-            if (from === OPERADOR && to?.endsWith('@c.us')) contato = to;
-            else if (to === OPERADOR && from?.endsWith('@c.us')) contato = from;
-            else return;
+            if (from === OPERADOR && to?.endsWith('@c.us')) {
+                contato = to;
+            } else if (to === OPERADOR && from?.endsWith('@c.us')) {
+                contato = from;
+            } else {
+                return;
+            }
 
-            // Inicia a gravação
-            if (from === OPERADOR && /^\/s$/i.test(texto)) {
-                // 1. VERIFICA SE JÁ EXISTE UMA GRAVAÇÃO ATIVA PARA ESTE CONTATO
-                if (conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Já existe uma gravação ativa para este contato. Finalize-a com /p ou /a antes de iniciar uma nova.');
-                    return;
-                }
+            console.log(`👤 Contato da conversa: ${contato}`);
+
+            if (!conversationState[contato]) {
+                conversationState[contato] = { stage: 'start' };
+                console.log(`🏁 Nova conversa iniciada com ${contato}. Estado: 'start'`);
+            }
+            const currentState = conversationState[contato];
+            console.log(`ℹ️ Estado atual da conversa com ${contato}: ${currentState.stage}`);
+
+
+            if (currentState.stage === 'recording') {
+                console.log(`🔄 Reiniciando timer de inatividade para ${contato}.`);
+                resetInactivityTimer(client, contato);
+            }
+
+            const texto = (msg.body || '').trim();
+
+            if (from === OPERADOR) {
+                console.log('🗣️ Mensagem do OPERADOR');
                 
-                const key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
-                conversationState[contato] = { key, slots: [] };
-                await client.sendText(from, '🟢 Gravação ativada.');
-                // 2. MENSAGEM PARA O CLIENTE FOI REMOVIDA. SÓ O OPERADOR RECEBE A CONFIRMAÇÃO.
-                return;
-            }
-
-            // Deixa o chamado em aberto
-            if (from === OPERADOR && /^\/a$/i.test(texto)) {
-                if (!conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Nenhuma gravação ativa.');
-                    return;
+                if (type === 'chat' && texto.startsWith('/')) {
+                    console.log(`⚙️ Comando do operador detectado: ${texto}`);
+                    if (/^\/\/\/\s*$/.test(texto)) {
+                        currentState.stage = currentState.stage === 'manual_override' ? 'start' : 'manual_override';
+                        await client.sendText(from, `🤖 Fluxo automático ${currentState.stage === 'manual_override' ? 'PAUSADO' : 'REATIVADO'}.`);
+                    } else if (/^\/s$/i.test(texto)) {
+                        if (currentState.stage !== 'recording') {
+                            currentState.key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
+                            currentState.slots = [];
+                            currentState.stage = 'recording';
+                            resetInactivityTimer(client, contato);
+                            await client.sendText(from, '🟢 Gravação manual ativada.');
+                            console.log(`🔴 Gravação iniciada manualmente para ${contato}.`);
+                        }
+                    } else if (/^\/d$/i.test(texto)) {
+                        if (currentState.key) await axios.delete(`${API_BASE_URL}/api/whatsapp-note/clean-by-key/${encodeURIComponent(currentState.key)}/`);
+                        delete conversationState[contato];
+                        await client.sendText(OPERADOR, '🗑️ Conversa/gravação cancelada.');
+                        console.log(`🗑️ Gravação cancelada para ${contato}.`);
+                    }
+                    return; 
                 }
-                await finalizarChamado(client, contato, false);
-                delete conversationState[contato];
-                return;
-            }
 
-            // Finaliza o chamado
-            if (from === OPERADOR && /^\/p$/i.test(texto)) {
-                if (!conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Nenhuma gravação ativa.');
-                    return;
-                }
-                await finalizarChamado(client, contato, true);
-                delete conversationState[contato];
-                return;
-            }
-
-            // Descarta a gravação
-            if (from === OPERADOR && /^\/d$/i.test(texto)) {
-                if (conversationState[contato]) {
-                    const key = conversationState[contato].key;
-                    await axios.delete(`http://localhost:8000/api/whatsapp-note/clean-by-key/${encodeURIComponent(key)}/`);
-                    
+                if (type === 'chat' && texto.toLowerCase() === 'chamado encerrado!') {
+                    console.log(`🏁 Comando de finalização de gravação para ${contato}`);
+                    if (!currentState.key) return client.sendText(from, '⚠️ Nenhuma gravação ativa para finalizar.');
+                    await finalizarGravacao(client, contato, false);
                     delete conversationState[contato];
-                    await client.sendText(OPERADOR, '🗑️ Gravação cancelada. As mensagens foram descartadas.');
-                } else {
-                    await client.sendText(OPERADOR, '⚠️ Nenhuma gravação ativa para cancelar.');
+                    return;
                 }
+
+                if (currentState.stage === 'recording') {
+                    console.log('🔴 Gravando mensagem do OPERADOR...');
+                    
+                    const payload = {
+                        conversation_key: currentState.key,
+                        username: from,
+                        contact_name: 'Suporte',
+                    };
+                    
+                    let hasContent = false;
+                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
+                    if (['image', 'ptt', 'video', 'document'].includes(type)) {
+                        hasContent = true;
+                        console.log(`📥 Decodificando mídia (operador) tipo '${type}'...`);
+                        
+                        const buffer = await client.decryptFile(msg);
+                        
+                        if (buffer) {
+                            console.log(`✅ Mídia (operador) decodificada com sucesso (${(buffer.length / 1024).toFixed(2)} KB).`);
+                            payload.media_data = `data:${mimetype};base64,${buffer.toString('base64')}`;
+                            // Para documentos, o nome do arquivo vai no 'text'
+                            payload.text = (type === 'document') ? filename : (msg.caption || '');
+                            payload.msg_type = (type === 'ptt') ? 'audio' : type;
+                        } else {
+                            hasContent = false;
+                            console.error(`❌ Falha ao decodificar mídia (operador) de ${from}.`);
+                        }
+                    } else if (texto) {
+                        hasContent = true;
+                        payload.text = texto;
+                        payload.msg_type = 'text';
+                    }
+
+                    if (hasContent) {
+                        console.log(`📤 Enviando payload (operador) para API. Tipo: ${payload.msg_type}`);
+                        const { data } = await axios.post(`${API_BASE_URL}/api/whatsapp-note/`, payload);
+                        currentState.slots.push(data.id);
+                        console.log(`✅ Payload (operador) salvo. ID do Slot: ${data.id}`);
+                    } else {
+                         console.log(`🤷 Nenhuma ação de gravação para esta mensagem (operador).`);
+                    }
+                    return; 
+                }
+            }
+
+            if (currentState.stage === 'manual_override') {
+                console.log(`⏸️ Fluxo automático para ${contato} está pausado. Ignorando mensagem do cliente.`);
                 return;
             }
 
-            // Registra a mensagem se houver uma gravação ativa
-            if (conversationState[contato]) {
-                const contactInfo = await client.getContact(contato);
-                const contactDisplayName = contactInfo.name || contactInfo.pushname || contato;
-                
-                const key = conversationState[contato].key;
-                const { data } = await axios.post('http://localhost:8000/api/whatsapp-note/', {
-                    conversation_key: key,
-                    text: texto,
-                    username: from,
-                    contact_name: contactDisplayName,
-                });
-                conversationState[contato].slots.push(data.id);
+            if (from === contato) {
+                console.log('👤 Mensagem do CLIENTE');
+                if (currentState.stage === 'start' && specialNumbers.includes(from)) {
+                    currentState.stage = 'awaiting_menu_choice';
+                    console.log(`📲 Enviando menu para cliente especial ${contato}.`);
+                    await client.sendText(contato, 'Olá! Como posso ajudar?\n\n*Digite:*\n*1* para Abrir um Chamado\n*2* para Outros Assuntos');
+                } else if (currentState.stage === 'awaiting_menu_choice') {
+                    if (texto === '1') {
+                        currentState.key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
+                        currentState.slots = [];
+                        currentState.stage = 'awaiting_problem';
+                        console.log(`🔴 Cliente ${contato} escolheu abrir chamado. Aguardando descrição.`);
+                        await client.sendText(contato, 'Certo! Para abrir seu chamado, por favor, descreva o problema ou envie fotos, vídeos e áudios.');
+                    } else {
+                        console.log(`👋 Cliente ${contato} escolheu outra opção. Encerrando fluxo.`);
+                        delete conversationState[contato];
+                        await client.sendText(contato, 'Ok. Se precisar de algo, é só chamar.');
+                    }
+                } else if (currentState.stage === 'awaiting_problem' || currentState.stage === 'recording') {
+                    const isFirstMessage = currentState.stage === 'awaiting_problem';
+                    const contactInfo = await client.getContact(from);
+                    const contactDisplayName = contactInfo.name || contactInfo.pushname || from;
+                    
+                    console.log(`🔴 Gravando mensagem do CLIENTE (${contactDisplayName})...`);
+                    const payload = {
+                        conversation_key: currentState.key,
+                        username: from,
+                        contact_name: contactDisplayName,
+                    };
+                    
+                    let hasContent = false;
+                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
+                    if (['image', 'ptt', 'video', 'document'].includes(type)) {
+                        hasContent = true;
+                        console.log(`📥 Decodificando mídia (cliente) tipo '${type}'...`);
+                        
+                        const buffer = await client.decryptFile(msg);
+                        
+                        if (buffer) {
+                            console.log(`✅ Mídia (cliente) decodificada com sucesso (${(buffer.length / 1024).toFixed(2)} KB).`);
+                            payload.media_data = `data:${mimetype};base64,${buffer.toString('base64')}`;
+                            payload.text = (type === 'document') ? filename : (msg.caption || '');
+                            payload.msg_type = (type === 'ptt') ? 'audio' : type;
+                            if (isFirstMessage) payload.problema = msg.caption || `[Mídia: ${payload.msg_type}]`;
+                        } else {
+                            hasContent = false;
+                            console.error(`❌ Falha ao decodificar mídia (cliente) de ${from}.`);
+                        }
+                    } else if (texto) {
+                        hasContent = true;
+                        payload.text = texto;
+                        payload.msg_type = 'text';
+                        if (isFirstMessage) payload.problema = texto;
+                    }
+
+                    if (hasContent) {
+                        console.log(`📤 Enviando payload (cliente) para API. Tipo: ${payload.msg_type}`);
+                        const { data } = await axios.post(`${API_BASE_URL}/api/whatsapp-note/`, payload);
+                        currentState.slots.push(data.id);
+                        console.log(`✅ Payload (cliente) salvo. ID: ${data.id}`);
+
+                        if (isFirstMessage) {
+                            currentState.stage = 'recording';
+                            console.log(`🔔 Chamado aberto por ${contactDisplayName}. Notificando operador.`);
+                            await client.sendText(contato, '*✅ Obrigado! Sua solicitação foi registrada com sucesso.*\nPara que possamos entender melhor e resolver seu problema, por favor, envie mais detalhes usando mensagens, fotos ou áudios — incluindo, se possível, o caminho ou passo a passo onde a situação ocorreu. Agora é só aguardar o contato de um atendente do suporte.');
+                            await client.sendText(OPERADOR, `🔔 Novo chamado aberto por ${contactDisplayName}.`);
+                        }
+                    } else {
+                        console.log(`🤷 Nenhuma ação de gravação para a mensagem do cliente.`);
+                    }
+                }
             }
         } catch (err) {
-            console.error('❌ Erro: ', err.message);
-            const errorMessage = err.response ? JSON.stringify(err.response.data) : err.message;
-            client.sendText(OPERADOR, `❌ Erro no Bot: ${errorMessage}`);
+            const errorMessage = err.response ? JSON.stringify(err.response.data) : (err.message || 'Erro desconhecido');
+            console.error('❌ Erro no processamento da mensagem: ', errorMessage, err.stack);
+            if (client) await client.sendText(OPERADOR, `❌ Erro no Bot: ${err.message || 'Erro desconhecido'}`);
         }
     });
 }
 
-async function finalizarChamado(client, contato, finalizado) {
-    const key = conversationState[contato].key;
-    const { data: slots } = await axios.get('http://localhost:8000/api/whatsapp-note/', {
-        params: { conversation_key: key },
-    });
-
-    if (slots.length === 0) {
-        await client.sendText(OPERADOR, '⚠️ Nenhuma mensagem para registrar. Finalizando sem salvar.');
+async function finalizarGravacao(client, contato, isAutomatic = false) {
+    const state = conversationState[contato];
+    if (!state || !state.key || !state.slots || state.slots.length === 0) {
+        if (!isAutomatic) await client.sendText(OPERADOR, '⚠️ Nenhuma mensagem para registrar.');
         return;
     }
+    
+    if (state.timeoutId) clearTimeout(state.timeoutId);
 
-    const { data } = await axios.get('http://localhost:8000/api/get-next-codigo/');
-    const codigo = data.codigo;
+    try {
+        console.log(`📦 Finalizando gravação para ${contato}. O chamado será criado como ABERTO. Código será gerado.`);
+        const { data } = await axios.get(`${API_BASE_URL}/api/get-next-codigo/`);
+        const codigo = data.codigo;
+        console.log(`🏷️ Código do chamado gerado: #${codigo}`);
 
-    for (const s of slots) {
-        await axios.patch(`http://localhost:8000/api/whatsapp-note/${s.id}/`, {
-            chamadofinalizado: finalizado,
-            codigo_chamado: codigo
-        });
+        for (const slotId of state.slots) {
+            await axios.patch(`${API_BASE_URL}/api/whatsapp-note/${slotId}/`, {
+                chamadofinalizado: false, 
+                codigo_chamado: codigo
+            });
+        }
+        
+        const msg = `🟡 Gravação de conversa encerrada! Código do Chamado: #${codigo}`;
+        await client.sendText(OPERADOR, msg);
+        if (isAutomatic) await client.sendText(OPERADOR, `(A gravação foi encerrada automaticamente por inatividade)`);
+        console.log(`✅ Gravação para o chamado #${codigo} finalizada e salva como ABERTO.`);
+
+    } catch (err) {
+        const errorMessage = err.response ? JSON.stringify(err.response.data) : (err.message || 'Erro desconhecido');
+        console.error('❌ Erro ao finalizar gravação: ', errorMessage);
+        await client.sendText(OPERADOR, `❌ Erro ao finalizar gravação: ${err.message}`);
     }
-
-    const msg = finalizado ? `🔴 Chamado finalizado. Código: #${codigo}` : `🟡 Chamado em aberto. Código: #${codigo}`;
-    await client.sendText(OPERADOR, msg);
 }

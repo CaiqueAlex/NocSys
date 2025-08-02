@@ -1,6 +1,1572 @@
-22h00-29-07-2025
+16h46-02.08.2025
 
-Projeto 90% Finalizado!
+CSS 100%, Back 100%, API 95% (ainda resta um crucial), Banco 100%
+
+bot.js
+
+const wppconnect = require('@wppconnect-team/wppconnect');
+const axios = require('axios');
+
+const OPERADOR = '5514997642104@c.us';
+const API_BASE_URL = 'http://localhost:80';
+const INACTIVITY_TIMEOUT = 900 * 1000;
+
+const conversationState = {};
+let specialNumbers = [];
+
+async function fetchSpecialNumbers() {
+    try {
+        console.log('🔄 Buscando números de clientes...');
+        const response = await axios.get(`${API_BASE_URL}/api/clientes/numeros/`);
+        specialNumbers = response.data;
+        console.log(`✅ Números de clientes atualizados: ${specialNumbers.length} contatos carregados.`);
+    } catch (error) {
+        console.error('❌ Erro ao buscar números de clientes da API:', error.message);
+    }
+}
+
+function getBaseKey(u1, u2) {
+    return [u1, u2].sort().join('|');
+}
+
+wppconnect.create({
+    session: 'noc-bot',
+    catchQR: (base64Qr, asciiQR) => { console.log(asciiQR); },
+    statusFind: (statusSession, session) => { console.log('Status:', statusSession, 'Session:', session); },
+    headless: false,
+    devtools: false,
+    useChrome: true,
+    debug: false,
+    logQR: true,
+    browserArgs: ['--no-sandbox'],
+    autoClose: 90000,
+    puppeteerOptions: {},
+    disableWelcome: true,
+})
+.then(client => start(client))
+.catch(console.error);
+
+function resetInactivityTimer(client, contato) {
+    const currentState = conversationState[contato];
+    if (currentState && currentState.timeoutId) {
+        clearTimeout(currentState.timeoutId);
+    }
+    if (currentState) {
+        currentState.timeoutId = setTimeout(async () => {
+            if (currentState.stage === 'recording') {
+                console.log(`⏳ Conversa com ${contato} inativa. Finalizando gravação...`);
+                await finalizarGravacao(client, contato, true);
+                delete conversationState[contato];
+            }
+        }, INACTIVITY_TIMEOUT);
+    }
+}
+
+async function start(client) {
+    await fetchSpecialNumbers();
+    setInterval(fetchSpecialNumbers, 5 * 60 * 1000);
+    console.log('✅ Bot iniciado. Aguardando mensagens...');
+
+    client.onAnyMessage(async (msg) => {
+        console.log(`\n--- [${new Date().toLocaleString()}] ---`);
+        console.log(`📨 Mensagem recebida: De=${msg.from}, Para=${msg.to}, Tipo=${msg.type}`);
+        
+        try {
+            if (msg.isGroupMsg || !msg.from) return;
+
+            const { from, to, type, mimetype, filename } = msg;
+
+            if (type === 'sticker') {
+                console.log(`🚫 Figurinha de ${from} ignorada.`);
+                return;
+            }
+
+            let contato;
+            if (from === OPERADOR && to?.endsWith('@c.us')) {
+                contato = to;
+            } else if (to === OPERADOR && from?.endsWith('@c.us')) {
+                contato = from;
+            } else {
+                return;
+            }
+
+            console.log(`👤 Contato da conversa: ${contato}`);
+
+            if (!conversationState[contato]) {
+                conversationState[contato] = { stage: 'start' };
+                console.log(`🏁 Nova conversa iniciada com ${contato}. Estado: 'start'`);
+            }
+            const currentState = conversationState[contato];
+            console.log(`ℹ️ Estado atual da conversa com ${contato}: ${currentState.stage}`);
+
+
+            if (currentState.stage === 'recording') {
+                console.log(`🔄 Reiniciando timer de inatividade para ${contato}.`);
+                resetInactivityTimer(client, contato);
+            }
+
+            const texto = (msg.body || '').trim();
+
+            if (from === OPERADOR) {
+                console.log('🗣️ Mensagem do OPERADOR');
+                
+                if (type === 'chat' && texto.startsWith('/')) {
+                    console.log(`⚙️ Comando do operador detectado: ${texto}`);
+                    if (/^\/\/\/\s*$/.test(texto)) {
+                        currentState.stage = currentState.stage === 'manual_override' ? 'start' : 'manual_override';
+                        await client.sendText(from, `🤖 Fluxo automático ${currentState.stage === 'manual_override' ? 'PAUSADO' : 'REATIVADO'}.`);
+                    } else if (/^\/s$/i.test(texto)) {
+                        if (currentState.stage !== 'recording') {
+                            currentState.key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
+                            currentState.slots = [];
+                            currentState.stage = 'recording';
+                            resetInactivityTimer(client, contato);
+                            await client.sendText(from, '🟢 Gravação manual ativada.');
+                            console.log(`🔴 Gravação iniciada manualmente para ${contato}.`);
+                        }
+                    } else if (/^\/d$/i.test(texto)) {
+                        if (currentState.key) await axios.delete(`${API_BASE_URL}/api/whatsapp-note/clean-by-key/${encodeURIComponent(currentState.key)}/`);
+                        delete conversationState[contato];
+                        await client.sendText(OPERADOR, '🗑️ Conversa/gravação cancelada.');
+                        console.log(`🗑️ Gravação cancelada para ${contato}.`);
+                    }
+                    return; 
+                }
+
+                if (type === 'chat' && texto.toLowerCase() === 'chamado encerrado!') {
+                    console.log(`🏁 Comando de finalização de gravação para ${contato}`);
+                    if (!currentState.key) return client.sendText(from, '⚠️ Nenhuma gravação ativa para finalizar.');
+                    await finalizarGravacao(client, contato, false);
+                    delete conversationState[contato];
+                    return;
+                }
+
+                if (currentState.stage === 'recording') {
+                    console.log('🔴 Gravando mensagem do OPERADOR...');
+                    
+                    const payload = {
+                        conversation_key: currentState.key,
+                        username: from,
+                        contact_name: 'Suporte',
+                    };
+                    
+                    let hasContent = false;
+                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
+                    if (['image', 'ptt', 'video', 'document'].includes(type)) {
+                        hasContent = true;
+                        console.log(`📥 Decodificando mídia (operador) tipo '${type}'...`);
+                        
+                        const buffer = await client.decryptFile(msg);
+                        
+                        if (buffer) {
+                            console.log(`✅ Mídia (operador) decodificada com sucesso (${(buffer.length / 1024).toFixed(2)} KB).`);
+                            payload.media_data = `data:${mimetype};base64,${buffer.toString('base64')}`;
+                            // Para documentos, o nome do arquivo vai no 'text'
+                            payload.text = (type === 'document') ? filename : (msg.caption || '');
+                            payload.msg_type = (type === 'ptt') ? 'audio' : type;
+                        } else {
+                            hasContent = false;
+                            console.error(`❌ Falha ao decodificar mídia (operador) de ${from}.`);
+                        }
+                    } else if (texto) {
+                        hasContent = true;
+                        payload.text = texto;
+                        payload.msg_type = 'text';
+                    }
+
+                    if (hasContent) {
+                        console.log(`📤 Enviando payload (operador) para API. Tipo: ${payload.msg_type}`);
+                        const { data } = await axios.post(`${API_BASE_URL}/api/whatsapp-note/`, payload);
+                        currentState.slots.push(data.id);
+                        console.log(`✅ Payload (operador) salvo. ID do Slot: ${data.id}`);
+                    } else {
+                         console.log(`🤷 Nenhuma ação de gravação para esta mensagem (operador).`);
+                    }
+                    return; 
+                }
+            }
+
+            if (currentState.stage === 'manual_override') {
+                console.log(`⏸️ Fluxo automático para ${contato} está pausado. Ignorando mensagem do cliente.`);
+                return;
+            }
+
+            if (from === contato) {
+                console.log('👤 Mensagem do CLIENTE');
+                if (currentState.stage === 'start' && specialNumbers.includes(from)) {
+                    currentState.stage = 'awaiting_menu_choice';
+                    console.log(`📲 Enviando menu para cliente especial ${contato}.`);
+                    await client.sendText(contato, 'Olá! Como posso ajudar?\n\n*Digite:*\n*1* para Abrir um Chamado\n*2* para Outros Assuntos');
+                } else if (currentState.stage === 'awaiting_menu_choice') {
+                    if (texto === '1') {
+                        currentState.key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
+                        currentState.slots = [];
+                        currentState.stage = 'awaiting_problem';
+                        console.log(`🔴 Cliente ${contato} escolheu abrir chamado. Aguardando descrição.`);
+                        await client.sendText(contato, 'Certo! Para abrir seu chamado, por favor, descreva o problema ou envie fotos, vídeos e áudios.');
+                    } else {
+                        console.log(`👋 Cliente ${contato} escolheu outra opção. Encerrando fluxo.`);
+                        delete conversationState[contato];
+                        await client.sendText(contato, 'Ok. Se precisar de algo, é só chamar.');
+                    }
+                } else if (currentState.stage === 'awaiting_problem' || currentState.stage === 'recording') {
+                    const isFirstMessage = currentState.stage === 'awaiting_problem';
+                    const contactInfo = await client.getContact(from);
+                    const contactDisplayName = contactInfo.name || contactInfo.pushname || from;
+                    
+                    console.log(`🔴 Gravando mensagem do CLIENTE (${contactDisplayName})...`);
+                    const payload = {
+                        conversation_key: currentState.key,
+                        username: from,
+                        contact_name: contactDisplayName,
+                    };
+                    
+                    let hasContent = false;
+                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
+                    if (['image', 'ptt', 'video', 'document'].includes(type)) {
+                        hasContent = true;
+                        console.log(`📥 Decodificando mídia (cliente) tipo '${type}'...`);
+                        
+                        const buffer = await client.decryptFile(msg);
+                        
+                        if (buffer) {
+                            console.log(`✅ Mídia (cliente) decodificada com sucesso (${(buffer.length / 1024).toFixed(2)} KB).`);
+                            payload.media_data = `data:${mimetype};base64,${buffer.toString('base64')}`;
+                            payload.text = (type === 'document') ? filename : (msg.caption || '');
+                            payload.msg_type = (type === 'ptt') ? 'audio' : type;
+                            if (isFirstMessage) payload.problema = msg.caption || `[Mídia: ${payload.msg_type}]`;
+                        } else {
+                            hasContent = false;
+                            console.error(`❌ Falha ao decodificar mídia (cliente) de ${from}.`);
+                        }
+                    } else if (texto) {
+                        hasContent = true;
+                        payload.text = texto;
+                        payload.msg_type = 'text';
+                        if (isFirstMessage) payload.problema = texto;
+                    }
+
+                    if (hasContent) {
+                        console.log(`📤 Enviando payload (cliente) para API. Tipo: ${payload.msg_type}`);
+                        const { data } = await axios.post(`${API_BASE_URL}/api/whatsapp-note/`, payload);
+                        currentState.slots.push(data.id);
+                        console.log(`✅ Payload (cliente) salvo. ID: ${data.id}`);
+
+                        if (isFirstMessage) {
+                            currentState.stage = 'recording';
+                            console.log(`🔔 Chamado aberto por ${contactDisplayName}. Notificando operador.`);
+                            await client.sendText(contato, '*✅ Obrigado! Sua solicitação foi registrada com sucesso.*\nPara que possamos entender melhor e resolver seu problema, por favor, envie mais detalhes usando mensagens, fotos ou áudios — incluindo, se possível, o caminho ou passo a passo onde a situação ocorreu. Agora é só aguardar o contato de um atendente do suporte.');
+                            await client.sendText(OPERADOR, `🔔 Novo chamado aberto por ${contactDisplayName}.`);
+                        }
+                    } else {
+                        console.log(`🤷 Nenhuma ação de gravação para a mensagem do cliente.`);
+                    }
+                }
+            }
+        } catch (err) {
+            const errorMessage = err.response ? JSON.stringify(err.response.data) : (err.message || 'Erro desconhecido');
+            console.error('❌ Erro no processamento da mensagem: ', errorMessage, err.stack);
+            if (client) await client.sendText(OPERADOR, `❌ Erro no Bot: ${err.message || 'Erro desconhecido'}`);
+        }
+    });
+}
+
+async function finalizarGravacao(client, contato, isAutomatic = false) {
+    const state = conversationState[contato];
+    if (!state || !state.key || !state.slots || state.slots.length === 0) {
+        if (!isAutomatic) await client.sendText(OPERADOR, '⚠️ Nenhuma mensagem para registrar.');
+        return;
+    }
+    
+    if (state.timeoutId) clearTimeout(state.timeoutId);
+
+    try {
+        console.log(`📦 Finalizando gravação para ${contato}. O chamado será criado como ABERTO. Código será gerado.`);
+        const { data } = await axios.get(`${API_BASE_URL}/api/get-next-codigo/`);
+        const codigo = data.codigo;
+        console.log(`🏷️ Código do chamado gerado: #${codigo}`);
+
+        for (const slotId of state.slots) {
+            await axios.patch(`${API_BASE_URL}/api/whatsapp-note/${slotId}/`, {
+                chamadofinalizado: false, 
+                codigo_chamado: codigo
+            });
+        }
+        
+        const msg = `🟡 Gravação de conversa encerrada! Código do Chamado: #${codigo}`;
+        await client.sendText(OPERADOR, msg);
+        if (isAutomatic) await client.sendText(OPERADOR, `(A gravação foi encerrada automaticamente por inatividade)`);
+        console.log(`✅ Gravação para o chamado #${codigo} finalizada e salva como ABERTO.`);
+
+    } catch (err) {
+        const errorMessage = err.response ? JSON.stringify(err.response.data) : (err.message || 'Erro desconhecido');
+        console.error('❌ Erro ao finalizar gravação: ', errorMessage);
+        await client.sendText(OPERADOR, `❌ Erro ao finalizar gravação: ${err.message}`);
+    }
+}
+
+chamados_finalizados.js
+
+// chamados_finalizados.js
+
+let cachedFinalizados = [];
+let currentUserFinalizados;
+let currentFinalizadosFilter = 'none';
+let currentFinalizadosSearch = '';
+
+async function loadChamadosFinalizados() {
+    const contentArea = document.getElementById('content-area');
+    contentArea.classList.remove('content-fade-in');
+    contentArea.classList.add('content-fade-out');
+    
+    await new Promise(resolve => setTimeout(resolve, 500));
+    contentArea.innerHTML = `<h1>Chamados Finalizados</h1><p>Carregando...</p>`;
+    contentArea.classList.remove('content-fade-out');
+    contentArea.classList.add('content-fade-in');
+
+    try {
+        const res = await fetch('/api/whatsapp-slots/?finalizado=1');
+        if (!res.ok) throw new Error('Erro ao buscar chamados finalizados');
+        cachedFinalizados = await res.json();
+        
+        if (!currentUserFinalizados) {
+            const userRes = await fetch('/api/user/stats/');
+            if (userRes.ok) {
+                const userData = await userRes.json();
+                currentUserFinalizados = userData.username;
+            }
+        }
+        
+        renderChamadosFinalizados('none');
+    } catch (err) {
+        contentArea.innerHTML = `<p style="color:red;">${err.message}</p>`;
+        console.error(err);
+    }
+}
+
+function renderChamadosFinalizados(filter = 'none', searchTerm = '') {
+    currentFinalizadosFilter = filter;
+    currentFinalizadosSearch = searchTerm;
+    const content = document.getElementById('content-area');
+
+    const headerHtml = `
+        <div class="page-header">
+            <h1>Chamados Finalizados</h1>
+            <div class="page-header-actions">
+                <div class="search-container">
+                    <input type="search" id="inputBuscaFinalizados" placeholder="Buscar por código..." value="${escapeHtml(searchTerm)}">
+                    <button id="btnBuscaFinalizados" title="Buscar">🔍</button>
+                </div>
+                <div class="filter-container">
+                    <button id="btnFiltroFinalizados" title="Filtrar chamados" class="menu-toggle-btn">🎚️</button>
+                    <div id="filterPopupFinalizados" class="filter-popup">
+                        <ul class="filter-options-list">
+                            <li class="filter-option ${filter === 'none' ? 'active' : ''}" data-filter="none">Limpar Filtro</li>
+                            <li class="filter-option ${filter === 'unassigned' ? 'active' : ''}" data-filter="unassigned">Sem atribuição</li>
+                            <li class="filter-option ${filter === 'assigned_to_me' ? 'active' : ''}" data-filter="assigned_to_me">Atribuídos a mim</li>
+                            <li class="filter-option ${filter === 'incident' ? 'active' : ''}" data-filter="incident">Apenas Incidentes</li>
+                            <li class="filter-option ${filter === 'request' ? 'active' : ''}" data-filter="request">Apenas Requisições</li>
+                        </ul>
+                    </div>
+                </div>
+                <button id="btnRecarregarChamadosFinalizados" title="Recarregar chamados" class="menu-toggle-btn">🔄</button>
+            </div>
+        </div>
+    `;
+
+    if (cachedFinalizados.length === 0) {
+        content.innerHTML = `${headerHtml}<p>Nenhum chamado finalizado encontrado.</p>`;
+        addHeaderEventListenersFinalizados();
+        return;
+    }
+    
+    const agrupado = {};
+    cachedFinalizados.forEach(c => {
+        if (!c.codigo_chamado) return;
+        const cod = c.codigo_chamado;
+        if (!agrupado[cod]) agrupado[cod] = [];
+        agrupado[cod].push(c);
+    });
+
+    let chamadosAgrupados = Object.values(agrupado);
+
+    switch (filter) {
+        case 'unassigned':
+            chamadosAgrupados = chamadosAgrupados.filter(g => !g[g.length - 1].suporte);
+            break;
+        case 'assigned_to_me':
+            chamadosAgrupados = chamadosAgrupados.filter(g => g[g.length - 1].suporte === currentUserFinalizados);
+            break;
+        case 'incident':
+            chamadosAgrupados = chamadosAgrupados.filter(g => g[g.length - 1].indicador === 'Incidente');
+            break;
+        case 'request':
+            chamadosAgrupados = chamadosAgrupados.filter(g => g[g.length - 1].indicador === 'Requisição');
+            break;
+    }
+
+    if (searchTerm.trim()) {
+        chamadosAgrupados = chamadosAgrupados.filter(g => g[0].codigo_chamado.includes(searchTerm.trim()));
+    }
+
+    const uniqueChamados = {};
+    chamadosAgrupados.forEach(g => {
+        const codigo = g[0].codigo_chamado;
+        if (!uniqueChamados[codigo]) {
+            uniqueChamados[codigo] = g[g.length - 1];
+        }
+    });
+
+    const chamadosArray = Object.values(uniqueChamados);
+
+    chamadosArray.sort((a, b) => parseInt(b.codigo_chamado) - parseInt(a.codigo_chamado));
+
+    let chamadosHtml = '';
+    if (chamadosArray.length === 0) {
+        chamadosHtml = '<p>Nenhum chamado corresponde aos filtros selecionados.</p>';
+    } else {
+        chamadosHtml += '<div id="lista-chamados-finalizados" style="display:flex;flex-direction:column;gap:12px;">';
+        chamadosArray.forEach(slot => {
+            const alertaHtml = !slot.suporte ? '<span class="chamado-alerta alert-blue" title="Chamado sem atribuição">❗</span>' : '';
+            // *** SOLUÇÃO: Correção do nome da classe CSS ***
+            const atrasoHtml = slot.atraso_status ? `<span class="atraso-status ${slot.atraso_status.toLowerCase().replace('!','')}">${slot.atraso_status}</span>` : '';
+
+            chamadosHtml += `
+                <div class="chamado" id="chamado-${escapeHtml(slot.codigo_chamado)}">
+                    <div class="chamado-header" onclick="toggleFinalizadoDetalhes(this.parentNode)">
+                        <div class="chamado-info">
+                            <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(slot.codigo_chamado)}</strong>
+                            <span class="chamado-resumo" title="${escapeHtml(slot.resumo || slot.problema || '')}">${escapeHtml(slot.resumo || slot.problema || '')}</span>
+                            <div class="chamado-info-dates">
+                                <span>Aberto: ${niceDate(slot.criado_em)}</span>
+                                <span>Encerrado: ${niceDate(slot.criado_em)}</span>
+                            </div>
+                        </div>
+                        <div class="chamado-actions">
+                            <button class="botao-mostrar">Mostrar</button>
+                            <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(slot.codigo_chamado)}')">✏️</button>
+                            <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(slot.codigo_chamado)}')">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="chamado-detalhes" data-codigo="${slot.codigo_chamado}"></div>
+                </div>
+            `;
+        });
+        chamadosHtml += `</div>`;
+    }
+
+    content.innerHTML = headerHtml + chamadosHtml;
+    addHeaderEventListenersFinalizados();
+}
+
+function addHeaderEventListenersFinalizados() {
+    document.getElementById('btnRecarregarChamadosFinalizados').onclick = loadChamadosFinalizados;
+    
+    const filterBtn = document.getElementById('btnFiltroFinalizados');
+    const filterPopup = document.getElementById('filterPopupFinalizados');
+    const searchInput = document.getElementById('inputBuscaFinalizados');
+    const searchBtn = document.getElementById('btnBuscaFinalizados');
+    
+    filterBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        filterPopup.classList.toggle('show');
+    });
+
+    document.querySelectorAll('#filterPopupFinalizados .filter-option').forEach(option => {
+        option.addEventListener('click', function() {
+            renderChamadosFinalizados(this.dataset.filter, currentFinalizadosSearch);
+            filterPopup.classList.remove('show');
+        });
+    });
+
+    searchBtn.addEventListener('click', () => {
+        renderChamadosFinalizados(currentFinalizadosFilter, searchInput.value);
+    });
+
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            renderChamadosFinalizados(currentFinalizadosFilter, searchInput.value);
+        }
+    });
+
+    document.addEventListener('click', (event) => {
+        if (filterPopup.classList.contains('show') && !filterBtn.contains(event.target) && !filterPopup.contains(event.target)) {
+            filterPopup.classList.remove('show');
+        }
+    });
+}
+
+async function toggleFinalizadoDetalhes(chamadoElement) {
+    const detalhes = chamadoElement.querySelector('.chamado-detalhes');
+    const btn = chamadoElement.querySelector('.botao-mostrar');
+
+    if (detalhes.style.display === 'block') {
+        detalhes.classList.remove('content-fade-in');
+        detalhes.classList.add('content-fade-out');
+        btn.innerText = 'Mostrar';
+        setTimeout(() => {
+            detalhes.style.display = 'none';
+            detalhes.innerHTML = '';
+        }, 500);
+        return;
+    }
+
+    btn.innerText = '...';
+    detalhes.style.display = 'block';
+    detalhes.classList.remove('content-fade-out');
+    detalhes.classList.add('content-fade-in');
+    detalhes.innerHTML = '<p>Carregando detalhes...</p>';
+    
+    const codigo = detalhes.getAttribute('data-codigo');
+
+    try {
+        let msgs = cachedFinalizados.filter(s => `${s.codigo_chamado}` === codigo);
+        msgs.sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+
+        let convo = `<div class="conversa-container">`;
+        msgs.forEach(m => {
+            const isSuporte = m.username === '5514997642104@c.us';
+            const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
+            
+            const messageContent = renderMessageContent(m);
+
+            convo += `
+                <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
+                    <div class="mensagem-header">
+                        <span>${escapeHtml(nomeExibido)}</span>
+                        <span>${niceDate(m.criado_em)}</span>
+                    </div>
+                    ${messageContent}
+                </div>
+            `;
+        });
+        convo += `</div>`;
+
+        const ultimo = msgs[msgs.length - 1] || {};
+        convo += `
+            <div class="detalhes-suporte-container">
+                <h3>Detalhes do Suporte</h3>
+                <div class="detalhes-grid">
+                    <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || 'N/A')}" />
+                    <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || 'N/A')}" />
+                    <span>Setor:</span> <input readonly value="${escapeHtml(ultimo.setor || 'N/A')}" />
+                    <span>Resumo:</span> <input readonly value="${escapeHtml(ultimo.resumo || 'N/A')}" />
+                    <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || 'N/A')}</textarea>
+                    <span>Solução:</span> <textarea readonly rows="2">${escapeHtml(ultimo.solucao || 'N/A')}</textarea>
+                    <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || 'N/A')}" />
+                    <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || 'N/A')}" />
+                </div>
+            </div>
+        `;
+
+        detalhes.innerHTML = convo;
+        btn.innerText = 'Esconder';
+
+    } catch (err) {
+        detalhes.innerHTML = `<p style="color:red;">${err.message}</p>`;
+        btn.innerText = 'Tentar Novamente';
+        console.error(err);
+    }
+}
+
+abertos.js
+
+// abertos.js
+
+let cachedAbertos = [];
+let currentUserAbertos;
+let currentAbertosFilter = 'none';
+let currentAbertosSearch = '';
+
+async function loadAbertos(initialFilter = 'none') {
+    const contentArea = document.getElementById('content-area');
+    contentArea.classList.remove('content-fade-in');
+    contentArea.classList.add('content-fade-out');
+    
+    await new Promise(resolve => setTimeout(resolve, 500));
+    contentArea.innerHTML = `<h1>Chamados em Aberto</h1><p>Carregando...</p>`;
+    contentArea.classList.remove('content-fade-out');
+    contentArea.classList.add('content-fade-in');
+
+    try {
+        const res = await fetch('/api/whatsapp-slots/?finalizado=0');
+        if (!res.ok) throw new Error('Erro ao buscar chamados em aberto');
+        cachedAbertos = await res.json();
+        if (!currentUserAbertos) {
+            const userRes = await fetch('/api/user/stats/');
+            if(userRes.ok) currentUserAbertos = (await userRes.json()).username;
+        }
+        renderAbertos(initialFilter);
+    } catch (err) {
+        contentArea.innerHTML = `<p style="color:red;">${err.message}</p>`;
+        console.error(err);
+    }
+}
+
+function renderAbertos(filter = 'none', searchTerm = '') {
+    currentAbertosFilter = filter;
+    currentAbertosSearch = searchTerm;
+    const content = document.getElementById('content-area');
+
+    const headerHtml = `
+        <div class="page-header">
+            <h1>Chamados em Aberto</h1>
+            <div class="page-header-actions">
+                <div class="search-container">
+                    <input type="search" id="inputBuscaAbertos" placeholder="Buscar por código..." value="${escapeHtml(searchTerm)}">
+                    <button id="btnBuscaAbertos" title="Buscar">🔍</button>
+                </div>
+                <div class="filter-container">
+                    <button id="btnFiltroAbertos" title="Filtrar chamados" class="menu-toggle-btn">🎚️</button>
+                    <div id="filterPopupAbertos" class="filter-popup">
+                        <ul class="filter-options-list">
+                            <li class="filter-option ${filter === 'none' ? 'active' : ''}" data-filter="none">Limpar Filtro</li>
+                            <li class="filter-option ${filter === 'unassigned' ? 'active' : ''}" data-filter="unassigned">Sem atribuição</li>
+                            <li class="filter-option ${filter === 'assigned_to_me' ? 'active' : ''}" data-filter="assigned_to_me">Atribuídos a mim</li>
+                            <li class="filter-option ${filter === 'incident' ? 'active' : ''}" data-filter="incident">Apenas Incidentes</li>
+                            <li class="filter-option ${filter === 'request' ? 'active' : ''}" data-filter="request">Apenas Requisições</li>
+                            <li class="filter-separator" style="margin: 4px 0; height: 1px; background-color: var(--bg-quaternary);"></li>
+                            <li class="filter-option ${filter === 'status_ok' ? 'active' : ''}" data-filter="status_ok">Status: Ok</li>
+                            <li class="filter-option ${filter === 'status_atencao' ? 'active' : ''}" data-filter="status_atencao">Status: Atenção</li>
+                            <li class="filter-option ${filter === 'status_atrasado' ? 'active' : ''}" data-filter="status_atrasado">Status: Atrasado</li>
+                        </ul>
+                    </div>
+                </div>
+                <button id="btnRecarregarChamadosAbertos" title="Recarregar chamados" class="menu-toggle-btn">🔄</button>
+            </div>
+        </div>
+    `;
+
+    let chamadosAgrupados = cachedAbertos.filter(slot => !slot.chamadofinalizado);
+
+    if (filter !== 'none') {
+        switch (filter) {
+            case 'unassigned':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => !slot.suporte);
+                break;
+            case 'assigned_to_me':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.suporte === currentUserAbertos);
+                break;
+            case 'incident':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.indicador === 'Incidente');
+                break;
+            case 'request':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.indicador === 'Requisição');
+                break;
+            case 'status_ok':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.atraso_status === 'Ok!');
+                break;
+            case 'status_atencao':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.atraso_status === 'Atenção!');
+                break;
+            case 'status_atrasado':
+                chamadosAgrupados = chamadosAgrupados.filter(slot => slot.atraso_status === 'Atrasado!');
+                break;
+        }
+    }
+
+    if (searchTerm.trim()) {
+        chamadosAgrupados = chamadosAgrupados.filter(slot => slot.codigo_chamado.includes(searchTerm.trim()));
+    }
+
+    const uniqueChamados = {};
+    chamadosAgrupados.forEach(slot => {
+        if (!uniqueChamados[slot.codigo_chamado]) {
+            uniqueChamados[slot.codigo_chamado] = slot;
+        }
+    });
+
+    const chamadosArray = Object.values(uniqueChamados);
+
+    chamadosArray.sort((a, b) => parseInt(a.codigo_chamado) - parseInt(b.codigo_chamado));
+
+    let chamadosHtml = '';
+    if (chamadosArray.length === 0) {
+        chamadosHtml = '<p>Nenhum chamado corresponde aos filtros selecionados.</p>';
+    } else {
+        chamadosHtml += '<div id="lista-chamados-abertos" style="display:flex;flex-direction:column;gap:12px;">';
+        chamadosArray.forEach(slot => {
+            const alertaHtml = !slot.suporte ? '<span class="chamado-alerta alert-gray" title="Chamado sem atribuição">❗</span>' : '';
+            // *** SOLUÇÃO: Correção do nome da classe CSS ***
+            const atrasoHtml = slot.atraso_status ? `<span class="atraso-status ${slot.atraso_status.toLowerCase().replace('!','')}">${slot.atraso_status}</span>` : '';
+
+            chamadosHtml += `
+                <div class="chamado" id="chamado-${escapeHtml(slot.codigo_chamado)}">
+                    <div class="chamado-header" onclick="toggleAbertoDetalhes(this.parentNode)">
+                        <div class="chamado-info">
+                            <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(slot.codigo_chamado)}</strong>
+                            <span class="chamado-resumo" title="${escapeHtml(slot.resumo || slot.problema || '')}">${escapeHtml(slot.resumo || slot.problema || '')}</span>
+                            <div class="chamado-info-dates">
+                                <span>Aberto: ${niceDate(slot.criado_em)}</span>
+                                ${atrasoHtml}
+                            </div>
+                        </div>
+                        <div class="chamado-actions">
+                            <button class="botao-mostrar">Mostrar</button>
+                            <button class="botao-finalizar" title="Finalizar Chamado" onclick="event.stopPropagation(); finalizarChamado('${escapeHtml(slot.codigo_chamado)}')">✔️</button>
+                            <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(slot.codigo_chamado)}')">✏️</button>
+                            <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(slot.codigo_chamado)}')">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="chamado-detalhes" data-codigo="${slot.codigo_chamado}"></div>
+                </div>
+            `;
+        });
+        chamadosHtml += `</div>`;
+    }
+
+    content.innerHTML = headerHtml + chamadosHtml;
+    addHeaderEventListenersAbertos();
+}
+
+function addHeaderEventListenersAbertos() {
+    document.getElementById('btnRecarregarChamadosAbertos').onclick = () => loadAbertos(currentAbertosFilter);
+    const filterBtn = document.getElementById('btnFiltroAbertos');
+    const filterPopup = document.getElementById('filterPopupAbertos');
+    const searchInput = document.getElementById('inputBuscaAbertos');
+    const searchBtn = document.getElementById('btnBuscaAbertos');
+
+    filterBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        filterPopup.classList.toggle('show');
+    });
+
+    document.querySelectorAll('#filterPopupAbertos .filter-option').forEach(option => {
+        option.addEventListener('click', function() {
+            renderAbertos(this.dataset.filter, currentAbertosSearch);
+            filterPopup.classList.remove('show');
+        });
+    });
+
+    searchBtn.addEventListener('click', () => {
+        renderAbertos(currentAbertosFilter, searchInput.value);
+    });
+
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            renderAbertos(currentAbertosFilter, searchInput.value);
+        }
+    });
+
+    document.addEventListener('click', (event) => {
+        if (filterPopup.classList.contains('show') && !filterBtn.contains(event.target) && !filterPopup.contains(event.target)) {
+            filterPopup.classList.remove('show');
+        }
+    });
+}
+
+async function toggleAbertoDetalhes(chamadoElement) {
+    const detalhes = chamadoElement.querySelector('.chamado-detalhes');
+    const btn = chamadoElement.querySelector('.botao-mostrar');
+
+    if (detalhes.style.display === 'block') {
+        detalhes.classList.remove('content-fade-in');
+        detalhes.classList.add('content-fade-out');
+        btn.innerText = 'Mostrar';
+        setTimeout(() => {
+            detalhes.style.display = 'none';
+            detalhes.innerHTML = '';
+        }, 500);
+        return;
+    }
+
+    btn.innerText = '...';
+    detalhes.style.display = 'block';
+    detalhes.classList.remove('content-fade-out');
+    detalhes.classList.add('content-fade-in');
+    detalhes.innerHTML = '<p>Carregando detalhes...</p>';
+    
+    const codigo = detalhes.getAttribute('data-codigo');
+
+    try {
+        let msgs = cachedAbertos.filter(s => `${s.codigo_chamado}` === codigo);
+        msgs.sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+
+        let convo = `<div class="conversa-container">`;
+        msgs.forEach(m => {
+            const isSuporte = m.username === '5514997642104@c.us';
+            const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
+            
+            const messageContent = renderMessageContent(m);
+
+            convo += `
+                <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
+                    <div class="mensagem-header">
+                        <span>${escapeHtml(nomeExibido)}</span>
+                        <span>${niceDate(m.criado_em)}</span>
+                    </div>
+                    ${messageContent}
+                </div>
+            `;
+        });
+        convo += `</div>`;
+
+        const ultimo = msgs[msgs.length - 1] || {};
+        convo += `
+            <div class="detalhes-suporte-container">
+                <h3>Detalhes do Suporte</h3>
+                <div class="detalhes-grid">
+                    <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || 'N/A')}" />
+                    <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || 'N/A')}" />
+                    <span>Setor:</span> <input readonly value="${escapeHtml(ultimo.setor || 'N/A')}" />
+                    <span>Resumo:</span> <input readonly value="${escapeHtml(ultimo.resumo || 'N/A')}" />
+                    <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || 'N/A')}</textarea>
+                    <span>Solução:</span> <textarea readonly rows="2">${escapeHtml(ultimo.solucao || 'N/A')}</textarea>
+                    <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || 'N/A')}" />
+                    <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || 'N/A')}" />
+                </div>
+            </div>
+        `;
+
+        detalhes.innerHTML = convo;
+        btn.innerText = 'Esconder';
+
+    } catch (err) {
+        detalhes.innerHTML = `<p style="color:red;">${err.message}</p>`;
+        btn.innerText = 'Tentar Novamente';
+        console.error(err);
+    }
+}
+
+views.py
+
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework import status, viewsets
+from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.authentication import SessionAuthentication
+from django.db.models import Max, Q, IntegerField, Min
+from django.db.models.functions import Cast
+from .models import WhatsappSlot, Cliente
+from .serializers import WhatsappSlotSerializer, ClienteSerializer
+from django.contrib.auth.models import User
+from django.utils import timezone
+import base64
+import uuid
+from django.core.files.base import ContentFile
+
+class ClienteViewSet(viewsets.ModelViewSet):
+    queryset = Cliente.objects.all().order_by('nome')
+    serializer_class = ClienteSerializer
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_cliente_numeros(request):
+    numeros = Cliente.objects.values_list('numero', flat=True)
+    return Response([f"{n}@c.us" for n in numeros], status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def get_grafico_status_chamados(request):
+    codigos_finalizados = WhatsappSlot.objects.filter(chamadofinalizado=True).values_list('codigo_chamado', flat=True).distinct()
+    codigos_abertos_atribuidos = WhatsappSlot.objects.filter(chamadofinalizado=False, suporte__isnull=False).values_list('codigo_chamado', flat=True).distinct()
+    
+    codigos_atribuidos_set = set(codigos_abertos_atribuidos)
+    
+    codigos_abertos_total = WhatsappSlot.objects.filter(
+        chamadofinalizado=False, codigo_chamado__isnull=False
+    ).values_list('codigo_chamado', flat=True).distinct()
+
+    codigos_nao_atribuidos_count = len(set(codigos_abertos_total) - codigos_atribuidos_set)
+
+    data = {
+        'labels': ['Resolvidos', 'Em Aberto (Atribuídos)', 'Em Aberto (Não Atribuídos)'],
+        'counts': [len(codigos_finalizados), len(codigos_atribuidos_set), codigos_nao_atribuidos_count]
+    }
+    return Response(data)
+
+def format_timespan(td):
+    days, remainder = divmod(td.total_seconds(), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _ = divmod(remainder, 60)
+    parts = []
+    if int(days) > 0:
+        parts.append(f"{int(days)} dia{'s' if int(days) > 1 else ''}")
+    if int(hours) > 0:
+        parts.append(f"{int(hours)} hora{'s' if int(hours) > 1 else ''}")
+    if int(minutes) > 0:
+        parts.append(f"{int(minutes)} minuto{'s' if int(minutes) > 1 else ''}")
+    
+    return ", ".join(parts) if parts else "Menos de um minuto"
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
+def get_dashboard_stats(request):
+    total_abertos = WhatsappSlot.objects.filter(
+        chamadofinalizado=False, codigo_chamado__isnull=False
+    ).values('codigo_chamado').distinct().count()
+
+    total_finalizados = WhatsappSlot.objects.filter(
+        chamadofinalizado=True, codigo_chamado__isnull=False
+    ).values('codigo_chamado').distinct().count()
+    
+    codigos_atribuidos = WhatsappSlot.objects.filter(
+        chamadofinalizado=False, 
+        suporte__isnull=False,
+        suporte__gt=''
+    ).values_list('codigo_chamado', flat=True).distinct()
+
+    abertos_sem_atribuicao = WhatsappSlot.objects.filter(
+        chamadofinalizado=False,
+        codigo_chamado__isnull=False
+    ).exclude(
+        codigo_chamado__in=set(codigos_atribuidos)
+    ).values('codigo_chamado').distinct().count()
+    
+    now = timezone.now()
+    atrasados_count = WhatsappSlot.objects.filter(
+        chamadofinalizado=False, codigo_chamado__isnull=False
+    ).values('codigo_chamado').annotate(
+        data_abertura=Min('criado_em')
+    ).filter(
+        data_abertura__lt=now - timezone.timedelta(days=20)
+    ).count()
+
+    return Response({
+        'total_abertos': total_abertos,
+        'total_finalizados': total_finalizados,
+        'abertos_sem_atribuicao': abertos_sem_atribuicao,
+        'atrasados': atrasados_count,
+    }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+def get_all_users(request):
+    users = User.objects.all().order_by('username').values_list('username', flat=True)
+    return Response(list(users))
+
+@api_view(['GET'])
+@authentication_classes([SessionAuthentication])
+def get_user_stats(request):
+    user = request.user
+    finalizados_count = WhatsappSlot.objects.filter(chamadofinalizado=True, codigo_chamado__isnull=False, suporte=user.username).values('codigo_chamado').distinct().count()
+    return Response({
+        "username": user.username, "email": user.email, "full_name": user.get_full_name(),
+        "date_joined": user.date_joined, "finalizados_count": finalizados_count,
+    })
+
+@api_view(['PATCH'])
+@authentication_classes([SessionAuthentication])
+def atualizar_chamado(request, codigo):
+    slots_do_chamado = WhatsappSlot.objects.filter(codigo_chamado=codigo)
+    if not slots_do_chamado.exists():
+        return Response({"detail": "Chamado não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+    
+    dados_para_atualizar = {}
+    allowed_fields = ['suporte', 'resumo', 'problema', 'solucao', 'indicador']
+    for field in allowed_fields:
+        if field in request.data:
+            dados_para_atualizar[field] = request.data[field]
+            
+    if dados_para_atualizar:
+        slots_do_chamado.update(**dados_para_atualizar)
+
+    ultimo_slot = slots_do_chamado.latest('criado_em')
+    serializer = WhatsappSlotSerializer(ultimo_slot)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@authentication_classes([SessionAuthentication])
+def finalizar_chamado(request, codigo):
+    slots = WhatsappSlot.objects.filter(codigo_chamado=codigo)
+    if not slots.exists():
+        return Response({"detail": "Chamado não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+    primeiro_slot = slots.earliest('criado_em')
+    tempo_solucao_str = format_timespan(timezone.now() - primeiro_slot.criado_em)
+    slots.update(chamadofinalizado=True, tempo_solucao=tempo_solucao_str)
+    return Response({"detail": "Chamado finalizado com sucesso."})
+
+@api_view(['DELETE'])
+@authentication_classes([SessionAuthentication])
+def apagar_chamado_por_codigo(request, codigo):
+    count, _ = WhatsappSlot.objects.filter(codigo_chamado=codigo).delete()
+    if count > 0:
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    return Response({"detail": "Chamado não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+def main_view(request):
+    if request.method == 'POST':
+        user = authenticate(request, username=request.POST.get('username'), password=request.POST.get('password'))
+        if user:
+            login(request, user)
+            return redirect('main')
+        return render(request, 'main.html', {'error': 'Usuário ou senha inválidos.'})
+    return render(request, 'main.html')
+
+@login_required(login_url='main')
+def logout_view(request):
+    logout(request)
+    return redirect('main')
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_next_codigo(request):
+    max_codigo = WhatsappSlot.objects.aggregate(max_codigo=Max(Cast('codigo_chamado', IntegerField())))['max_codigo']
+    return Response({"codigo": str((max_codigo or 0) + 1)})
+
+@api_view(['DELETE'])
+@permission_classes([AllowAny])
+def clean_chamado_by_key(request, key):
+    WhatsappSlot.objects.filter(conversation_key=key, chamadofinalizado=False).delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class WhatsappSlotCreateOrUpdateAPIView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        data = request.data.copy()
+        if 'contact_name' in data and data['contact_name'] != 'Suporte':
+            data['cliente'] = data['contact_name']
+        
+        numero_cliente_sem_arroba = data.get('username', '').replace('@c.us', '')
+        cliente_obj = Cliente.objects.filter(numero=numero_cliente_sem_arroba).first()
+
+        if cliente_obj:
+            if not data.get('cliente') or data.get('cliente') == numero_cliente_sem_arroba:
+                 data['cliente'] = cliente_obj.nome
+            if cliente_obj.setor:
+                 data['setor'] = cliente_obj.setor
+
+        serializer = WhatsappSlotSerializer(data=data)
+        if serializer.is_valid():
+            media_data_b64 = serializer.validated_data.pop('media_data', None)
+            slot_instance = serializer.save()
+
+            if media_data_b64:
+                try:
+                    format, imgstr = media_data_b64.split(';base64,') 
+                    ext = format.split('/')[-1].split(';')[0]
+                    filename = f"{uuid.uuid4()}.{ext}"
+                    decoded_file = ContentFile(base64.b64decode(imgstr), name=filename)
+                    slot_instance.media_file.save(filename, decoded_file, save=True)
+                except Exception as e:
+                    slot_instance.delete()
+                    return Response({"detail": f"Erro ao processar arquivo de mídia: {e}"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            final_data = WhatsappSlotSerializer(slot_instance).data
+            return Response(final_data, status=status.HTTP_201_CREATED)
+            
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk=None):
+        try:
+            slot = WhatsappSlot.objects.get(pk=pk)
+        except WhatsappSlot.DoesNotExist:
+            return Response({"detail": "Slot não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+            
+        serializer = WhatsappSlotSerializer(slot, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class WhatsappSlotListAPIView(ListAPIView):
+    serializer_class = WhatsappSlotSerializer
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        is_finalizado = self.request.query_params.get('finalizado') in ['1', 'true', 'sim', 'yes']
+        codigos = WhatsappSlot.objects.filter(
+            chamadofinalizado=is_finalizado, codigo_chamado__isnull=False
+        ).values_list('codigo_chamado', flat=True).distinct()
+        return WhatsappSlot.objects.filter(codigo_chamado__in=codigos).order_by('codigo_chamado', 'criado_em')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        
+        chamados_agrupados = {}
+        for slot in queryset:
+            codigo = slot.codigo_chamado
+            if codigo not in chamados_agrupados:
+                chamados_agrupados[codigo] = []
+            chamados_agrupados[codigo].append(slot)
+
+        dados_finais = []
+        now = timezone.now()
+        for codigo, slots in chamados_agrupados.items():
+            primeiro_slot = slots[0]
+            ultimo_slot = slots[-1]
+            
+            # --- LÓGICA DE CONSOLIDAÇÃO CORRIGIDA E UNIFICADA ---
+            cliente_correto = next((s.cliente for s in slots if s.cliente and s.cliente != 'Suporte'), 'Cliente Desconhecido')
+            suporte_correto = next((s.suporte for s in reversed(slots) if s.suporte and s.suporte.strip()), None)
+            problema_texto = next((s.problema for s in slots if s.problema and s.problema.strip()), None)
+            setor_texto = next((s.setor for s in slots if s.setor and s.setor.strip()), None)
+            
+            dados_consolidados = {
+                'cliente': cliente_correto,
+                'suporte': suporte_correto,
+                'problema': problema_texto, 
+                'setor': setor_texto,
+                'resumo': ultimo_slot.resumo, 
+                'solucao': ultimo_slot.solucao,
+                'indicador': ultimo_slot.indicador,
+                'tempo_solucao': ultimo_slot.tempo_solucao,
+            }
+            
+            atraso_status = None
+            if not ultimo_slot.chamadofinalizado:
+                dias_em_aberto = (now - primeiro_slot.criado_em).days
+                if dias_em_aberto > 20: atraso_status = "Atrasado!"
+                elif dias_em_aberto > 10: atraso_status = "Atenção!"
+                else: atraso_status = "Ok!"
+            
+            # Usar um slot representativo para a lista, mas com dados consolidados
+            slot_representativo = self.get_serializer(ultimo_slot).data
+            slot_representativo.update(dados_consolidados)
+            slot_representativo['atraso_status'] = atraso_status
+            
+            # Adicionar todos os slots para a visualização detalhada, se necessário no futuro
+            # Por agora, o frontend está usando a lista de slots únicos, então só precisamos de um.
+            # Se a lógica do frontend mudar para usar todos os slots, esta parte pode ser expandida.
+            # Para a lógica atual do frontend, apenas um slot representativo é suficiente.
+            dados_finais.append(slot_representativo)
+        
+        return Response(dados_finais)
+
+class WhatsappSlotUpdateAPIView(RetrieveUpdateAPIView):
+    queryset = WhatsappSlot.objects.all()
+    serializer_class = WhatsappSlotSerializer
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+
+urls.py
+
+from django.urls import path, include
+from . import views
+from django.views.generic.base import RedirectView
+from rest_framework.routers import DefaultRouter
+
+# --- ROUTER PARA CLIENTES ---
+router = DefaultRouter()
+router.register(r'clientes', views.ClienteViewSet, basename='cliente')
+
+urlpatterns = [
+    # Redireciona a raiz do site para /NocSys/
+    path('', RedirectView.as_view(pattern_name='main', permanent=False)),
+
+    # APIs do Frontend
+    path('api/dashboard/stats/', views.get_dashboard_stats, name='get_dashboard_stats'),
+    path('api/user/stats/', views.get_user_stats, name='get_user_stats'),
+    path('api/users/', views.get_all_users, name='get_all_users'),
+    path('api/chamado/apagar/<str:codigo>/', views.apagar_chamado_por_codigo, name='apagar_chamado_por_codigo'),
+    path('api/chamado/atualizar/<str:codigo>/', views.atualizar_chamado, name='atualizar_chamado'),
+    path('api/chamado/finalizar/<str:codigo>/', views.finalizar_chamado, name='finalizar_chamado'),
+    # --- NOVA API DE GRÁFICOS ---
+    path('api/graficos/status_chamados/', views.get_grafico_status_chamados, name='get_grafico_status_chamados'),
+    
+    # URL principal da aplicação
+    path('NocSys/', views.main_view, name='main'),
+    
+    # URL de Logout
+    path('logout/', views.logout_view, name='logout'),
+
+    # APIs para o bot
+    path('api/whatsapp-note/', views.WhatsappSlotCreateOrUpdateAPIView.as_view(), name='api-whatsapp-note'),
+    path('api/whatsapp-note/<int:pk>/', views.WhatsappSlotCreateOrUpdateAPIView.as_view(), name='api-whatsapp-note-detail'),
+    path('api/whatsapp-note/clean-by-key/<path:key>/', views.clean_chamado_by_key, name='api-whatsapp-note-clean-by-key'),
+    path('api/get-next-codigo/', views.get_next_codigo, name='api-get-next-codigo'),
+    path('api/clientes/numeros/', views.get_cliente_numeros, name='get-cliente-numeros'),
+
+    # APIs para listagem/edição no front
+    path('api/whatsapp-slots/', views.WhatsappSlotListAPIView.as_view(), name='api-whatsapp-slot-list'),
+    path('api/whatsapp-slots/<int:pk>/', views.WhatsappSlotUpdateAPIView.as_view(), name='api-whatsapp-slot-edit'),
+
+    # --- ROTAS DO CLIENTEVIEWSET ---
+    path('api/', include(router.urls)),
+]
+
+models.py
+
+from django.db import models
+
+class WhatsappSlot(models.Model):
+    conversation_key = models.CharField(max_length=100)
+    contact_name = models.CharField(max_length=150, blank=True, null=True)
+    text = models.TextField(blank=True, null=True)
+    username = models.CharField(max_length=100)
+    duration = models.IntegerField(default=0)
+
+    # --- CAMPOS ALTERADOS/ADICIONADOS ---
+    msg_type = models.CharField(max_length=10, default='text')
+    media_file = models.FileField(upload_to='whatsapp_media/', blank=True, null=True)
+
+    suporte = models.CharField(max_length=100, blank=True, null=True)
+    cliente = models.CharField(max_length=100, blank=True, null=True)
+    resumo = models.CharField(max_length=200, blank=True, null=True)
+    problema = models.TextField(blank=True, null=True)
+    indicador = models.CharField(max_length=100, blank=True, null=True)
+    tempo_solucao = models.CharField(max_length=100, blank=True, null=True)
+    solucao = models.TextField(blank=True, null=True)
+    setor = models.CharField(max_length=100, blank=True, null=True)
+
+    chamadofinalizado = models.BooleanField(default=False)
+    codigo_chamado = models.CharField(max_length=100, blank=True, null=True)
+
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.conversation_key} - {self.criado_em.strftime('%d/%m %H:%M')}"
+
+# NOVO MODELO ADICIONADO
+class Cliente(models.Model):
+    nome = models.CharField(max_length=150)
+    numero = models.CharField(
+        max_length=20, 
+        unique=True, 
+        help_text="Formato: 5514912345678"
+    )
+    setor = models.CharField(max_length=100, blank=True, null=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['nome']
+
+    def __str__(self):
+        return self.nome
+
+
+serializers.py
+
+from rest_framework import serializers
+from .models import WhatsappSlot, Cliente
+
+class WhatsappSlotSerializer(serializers.ModelSerializer):
+    # --- CAMPO ADICIONADO ---
+    # Campo virtual para receber dados em base64 do bot
+    media_data = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    class Meta:
+        model = WhatsappSlot
+        fields = '__all__'
+
+    def validate_conversation_key(self, value):
+        if not value:
+            raise serializers.ValidationError("conversation_key é obrigatório.")
+        return value
+
+# NOVO SERIALIZER ADICIONADO
+class ClienteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cliente
+        fields = '__all__'
+
+dashboard.js
+
+// dashboard.js
+
+async function loadDashboard() {
+    const contentArea = document.getElementById('content-area');
+    contentArea.classList.remove('content-fade-in');
+    contentArea.classList.add('content-fade-out');
+
+    // Aguarda a transição de fade-out
+    await new Promise(resolve => setTimeout(resolve, 500));
+    contentArea.innerHTML = `
+        <h1>Dashboard</h1>
+        <p>Carregando estatísticas...</p>
+    `;
+    contentArea.classList.remove('content-fade-out');
+    contentArea.classList.add('content-fade-in');
+
+    try {
+        const response = await fetch('/api/dashboard/stats/');
+        if (!response.ok) throw new Error(`Erro: ${response.statusText}`);
+        const stats = await response.json();
+
+        contentArea.innerHTML = `
+            <div class="dashboard-content">
+                <h1>Dashboard</h1>
+                <div class="dashboard-grid">
+                    <div class="dashboard-card card-abertos" onclick="loadAbertos()">
+                        <div class="card-number">${stats.total_abertos}</div>
+                        <div class="card-title">Chamados em Aberto</div>
+                    </div>
+                    <div class="dashboard-card card-finalizados" onclick="loadChamadosFinalizados()">
+                        <div class="card-number">${stats.total_finalizados}</div>
+                        <div class="card-title">Chamados Finalizados</div>
+                    </div>
+                    <div class="dashboard-card card-sem-atribuicao" onclick="loadAbertos('unassigned')">
+                        <div class="card-number">${stats.abertos_sem_atribuicao || 0}</div>
+                        <div class="card-title">Abertos (Sem Atribuição)</div>
+                    </div>
+                    <div class="dashboard-card card-atrasados" onclick="loadAbertos('status_atrasado')">
+                        <div class="card-number">${stats.atrasados}</div>
+                        <div class="card-title">Chamados Atrasados</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        console.error("Erro ao carregar o dashboard:", error);
+        contentArea.innerHTML = `<h1>Dashboard</h1><p style="color: var(--danger-color);">Não foi possível carregar as estatísticas.</p>`;
+    }
+}
+
+config.js
+
+let statusChartInstance = null;
+
+async function showSettingsModal() {
+    const backdrop = document.getElementById('settings-backdrop');
+    const settingsBox = document.getElementById('settings-box');
+    if (!backdrop) return;
+    
+    const closeBtn = document.getElementById('settings-close-btn');
+    const navLinks = document.querySelectorAll('.settings-nav-link');
+
+    backdrop.classList.remove('hidden');
+    
+    const hide = () => backdrop.classList.add('hidden');
+    closeBtn.onclick = hide;
+    backdrop.onclick = (e) => { if(e.target === backdrop) hide(); };
+
+    navLinks.forEach(link => {
+        link.onclick = (e) => {
+            e.preventDefault();
+            navLinks.forEach(l => l.classList.remove('active'));
+            document.querySelectorAll('.settings-view').forEach(v => v.classList.add('hidden'));
+
+            link.classList.add('active');
+            const targetId = link.getAttribute('data-target');
+            const targetView = document.getElementById(targetId);
+            
+            if (targetId === 'settings-view-graficos') {
+                settingsBox.classList.add('chart-view-active');
+                loadCharts();
+            } else {
+                settingsBox.classList.remove('chart-view-active');
+                if (targetId === 'settings-view-user') loadUserStats();
+                else if (targetId === 'settings-view-clientes') loadClientManagement();
+            }
+            if(targetView) targetView.classList.remove('hidden');
+        };
+    });
+
+    // Carga inicial da primeira aba
+    document.querySelector('.settings-nav-link.active').click();
+}
+
+async function loadUserStats() {
+    try {
+        const res = await fetch('/api/user/stats/');
+        if (!res.ok) throw new Error('Falha ao carregar dados do usuário.');
+        const data = await res.json();
+        document.getElementById('settings-user-name').textContent = data.full_name || data.username;
+        document.getElementById('settings-user-email').textContent = data.email || 'Não informado';
+        document.getElementById('settings-user-username').textContent = data.username;
+        document.getElementById('settings-user-joined').textContent = new Date(data.date_joined).toLocaleDateString('pt-BR');
+        document.getElementById('settings-finalizados-count').textContent = data.finalizados_count;
+    } catch (error) {
+        console.error('Erro:', error);
+    }
+}
+
+async function loadClientManagement() {
+    const tableBody = document.getElementById('client-table-body');
+    tableBody.innerHTML = '<tr><td colspan="4">Carregando...</td></tr>';
+    try {
+        const res = await fetch('/api/clientes/');
+        if (!res.ok) throw new Error('Falha ao buscar clientes.');
+        const clientes = await res.json();
+        tableBody.innerHTML = '';
+        if (clientes.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="4">Nenhum cliente cadastrado.</td></tr>';
+        } else {
+            clientes.forEach(c => {
+                const row = document.createElement('tr');
+                row.id = `client-row-${c.id}`;
+                row.innerHTML = `
+                    <td>${c.nome}</td> <td>${c.numero}</td> <td>${c.setor || 'N/A'}</td>
+                    <td class="client-actions">
+                        <button class="btn-client-edit" data-id="${c.id}" title="Editar">✏️</button>
+                        <button class="btn-client-delete" data-id="${c.id}" title="Apagar">🗑️</button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+        document.querySelectorAll('.btn-client-edit').forEach(btn => btn.onclick = () => handleEditClient(btn.dataset.id));
+        document.querySelectorAll('.btn-client-delete').forEach(btn => btn.onclick = () => handleDeleteClient(btn.dataset.id));
+    } catch (error) {
+        tableBody.innerHTML = `<tr><td colspan="4" style="color:red;">${error.message}</td></tr>`;
+    }
+    document.getElementById('add-client-btn').onclick = () => handleAddClient();
+}
+
+async function loadCharts() {
+    const legendContainer = document.getElementById('status-chart-legend');
+    legendContainer.innerHTML = 'Carregando...';
+    try {
+        const res = await fetch('/api/graficos/status_chamados/');
+        if (!res.ok) throw new Error('Falha ao carregar dados.');
+        const chartData = await res.json();
+        renderStatusChart(chartData);
+    } catch (error) {
+        legendContainer.innerHTML = `<p style="color:red;">${error.message}</p>`;
+    }
+}
+
+function renderStatusChart(data) {
+    const canvas = document.getElementById('status-pie-chart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (statusChartInstance) statusChartInstance.destroy();
+
+    statusChartInstance = new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels: data.labels,
+            datasets: [{
+                data: data.counts,
+                backgroundColor: ['#22c55e', '#facc15', '#ef4444'],
+                borderColor: 'var(--bg-tertiary)',
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    const legendContainer = document.getElementById('status-chart-legend');
+    legendContainer.innerHTML = '';
+    data.labels.forEach((label, index) => {
+        legendContainer.innerHTML += `
+            <div class="legend-item">
+                <span class="legend-color-box" style="background-color: ${statusChartInstance.data.datasets[0].backgroundColor[index]};"></span>
+                <span class="legend-label">${label}: <strong>${data.counts[index]}</strong></span>
+            </div>`;
+    });
+}
+
+// --- Funções CRUD para Clientes ---
+function showClientModal(client = null) {
+    const modal = document.getElementById('cliente-modal-backdrop');
+    const form = document.getElementById('cliente-form');
+    const title = document.getElementById('cliente-modal-title');
+    const closeBtn = document.getElementById('cliente-modal-close-btn');
+
+    form.reset();
+    form.elements.id.value = '';
+
+    if (client) {
+        title.textContent = 'Editar Cliente';
+        form.elements.id.value = client.id;
+        form.elements.nome.value = client.nome;
+        form.elements.numero.value = client.numero;
+        form.elements.setor.value = client.setor || '';
+    } else {
+        title.textContent = 'Adicionar Novo Cliente';
+    }
+
+    modal.classList.remove('hidden');
+    
+    const hide = () => modal.classList.add('hidden');
+    closeBtn.onclick = hide;
+    modal.onclick = (e) => { if(e.target === modal) hide(); };
+    form.onsubmit = handleSaveClient;
+}
+
+function handleAddClient() {
+    showClientModal();
+}
+
+async function handleEditClient(id) {
+    try {
+        const res = await fetch(`/api/clientes/${id}/`);
+        if (!res.ok) throw new Error('Cliente não encontrado.');
+        const clientData = await res.json();
+        showClientModal(clientData);
+    } catch(err) {
+        alert(err.message);
+    }
+}
+
+async function handleSaveClient(event) {
+    event.preventDefault();
+    const form = event.target;
+    const saveBtn = document.getElementById('cliente-form-save-btn');
+    const clientId = form.elements.id.value;
+    const isEditing = !!clientId;
+
+    const data = {
+        nome: form.elements.nome.value,
+        numero: form.elements.numero.value,
+        setor: form.elements.setor.value,
+    };
+
+    const url = isEditing ? `/api/clientes/${clientId}/` : '/api/clientes/';
+    const method = isEditing ? 'PUT' : 'POST';
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Salvando...';
+
+    try {
+        const res = await fetch(url, {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
+            },
+            body: JSON.stringify(data)
+        });
+
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(JSON.stringify(errorData));
+        }
+        
+        document.getElementById('cliente-modal-backdrop').classList.add('hidden');
+        loadClientManagement(); // Recarrega a lista
+        
+    } catch (err) {
+        alert(`Erro ao salvar cliente: ${err.message}`);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Salvar';
+    }
+}
+
+async function handleDeleteClient(id) {
+    if (!confirm('Tem certeza que deseja apagar este cliente? Esta ação não pode ser desfeita.')) {
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/clientes/${id}/`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': getCsrfToken() }
+        });
+
+        if (!res.ok) {
+            throw new Error('Falha ao apagar o cliente.');
+        }
+
+        const row = document.getElementById(`client-row-${id}`);
+        if(row) row.remove();
+
+    } catch (err) {
+        alert(err.message);
+    }
+}
 
 main.html
 
@@ -13,17 +1579,20 @@ main.html
 <title>NocSys</title>
 <link rel="icon" type="image/png" href="{% static 'css/Nocsyslogo.png' %}">
 <link rel="stylesheet" href="{% static 'css/main.css' %}" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
-<!-- BARRA SUPERIOR E ANIMAÇÃO - Visível em todas as telas -->
+<!-- BARRA SUPERIOR E ANIMAÇÃO -->
 <div class="top-bar fade-slide-down">
     <div class="top-bar-left">
+        {% if user.is_authenticated %}
         <button id="menu-toggle-btn" class="menu-toggle-btn" title="Alternar menu">
             <span></span>
             <span></span>
             <span></span>
         </button>
+        {% endif %}
         <div class="logo-login">NocSys</div>
         {% if user.is_authenticated %}
         <div id="logo-animation-container">
@@ -37,7 +1606,9 @@ main.html
         {% endif %}
     </div>
     <div class="top-bar-right">
+        {% if user.is_authenticated %}
         <button id="settings-btn" title="Configurações">⚙️</button>
+        {% endif %}
         <div class="clock" id="clock">--:--:--</div>
         <div class="theme-switch-wrapper">
             <label class="theme-switch" for="theme-checkbox">
@@ -51,9 +1622,8 @@ main.html
     <div id="lightbulb">💡</div>
 </div>
 
-
 {% if user.is_authenticated %}
-  <!-- INÍCIO DO CONTEÚDO DA HOME (AUTENTICADO) -->
+  <!-- CONTEÚDO DA HOME (AUTENTICADO) -->
   <div id="csrf-container" style="display: none;">{% csrf_token %}</div>
   <div class="main-container" id="main-container">
       <div class="sidebar" id="sidebar">
@@ -69,13 +1639,12 @@ main.html
         </ul>
       </div>
       <div class="content" id="content-area">
-        <!-- O conteúdo será carregado dinamicamente aqui -->
+          <!-- O conteúdo será carregado aqui -->
       </div>
   </div>
-  <!-- FIM DO CONTEÚDO DA HOME -->
 
 {% else %}
-  <!-- INÍCIO DO CONTEÚDO DE LOGIN (NÃO AUTENTICADO) -->
+  <!-- CONTEÚDO DE LOGIN (NÃO AUTENTICADO) -->
   <div class="login-page-container fade-zoom-in">
     <div class="login-box fade-zoom-in" id="login-box">
       <h2 class="titlelogin">NocSys - Login</h2>
@@ -90,18 +1659,15 @@ main.html
       </form>
     </div>
   </div>
-  <!-- FIM DO CONTEÚDO DE LOGIN -->
 {% endif %}
 
-<!-- Animação de Inatividade -->
+<!-- MODAIS -->
 <div id="inactive-prompt-container">
     <div class="speech-bubble">
         <p id="inactive-prompt-text"></p>
     </div>
     <div class="prompt-character">🤔</div>
 </div>
-
-<!-- MODAL DE CONFIRMAÇÃO DE EXCLUSÃO -->
 <div id="confirm-delete-backdrop" class="modal-backdrop hidden">
     <div id="confirm-delete-box" class="modal-box">
         <div id="confirm-initial-view">
@@ -116,8 +1682,6 @@ main.html
         </div>
     </div>
 </div>
-
-<!-- MODAL DE CONFIRMAÇÃO DE FINALIZAÇÃO -->
 <div id="confirm-finalize-backdrop" class="modal-backdrop hidden">
     <div id="confirm-finalize-box" class="modal-box">
         <div id="confirm-initial-view-finalize">
@@ -132,12 +1696,9 @@ main.html
         </div>
     </div>
 </div>
-
-<!-- MODAL DE EDIÇÃO DE CHAMADO -->
 <div id="edit-chamado-backdrop" class="modal-backdrop hidden">
     <div id="edit-chamado-box" class="modal-box">
         <button id="edit-chamado-close-btn" class="modal-close-btn">&times;</button>
-        
         <div id="edit-chamado-form-view">
             <h2>Editar Chamado #<span id="edit-chamado-codigo"></span></h2>
             <form id="edit-chamado-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
@@ -148,7 +1709,7 @@ main.html
                         <button type="button" id="assign-to-me-btn" title="Atribuir a mim">👤</button>
                     </div>
                     <span>Cliente:</span> <input name="cliente" readonly />
-                    <span>Setor:</span> <input name="setor" />
+                    <span>Setor:</span> <input name="setor" readonly />
                     <span>Resumo:</span> <input name="resumo" />
                     <span>Problema:</span> <textarea name="problema" rows="3"></textarea>
                     <span>Solução:</span> <textarea name="solucao" rows="3"></textarea>
@@ -165,14 +1726,11 @@ main.html
                 </div>
             </form>
         </div>
-        
         <div id="edit-chamado-success-view" class="hidden">
             <p style="font-size: 1.5rem; text-align: center;">Alterações salvas! ✅</p>
         </div>
     </div>
 </div>
-
-<!-- MODAL DE CONFIGURAÇÕES -->
 <div id="settings-backdrop" class="modal-backdrop hidden">
     <div id="settings-box" class="modal-box">
         <div class="settings-container fade-in">
@@ -180,13 +1738,12 @@ main.html
                 <h3>Configurações</h3>
                 <ul>
                     <li><a href="#" class="settings-nav-link active" data-target="settings-view-user">👤 Usuário</a></li>
-                    <li><a href="#" class="settings-nav-link" data-target="settings-view-export">📤 Exportar XML</a></li>
+                    <li><a href="#" class="settings-nav-link" data-target="settings-view-clientes">👥 Clientes</a></li>
+                    <li><a href="#" class="settings-nav-link" data-target="settings-view-graficos">📈 Gráficos</a></li>
                 </ul>
             </div>
             <div class="settings-content">
                 <button id="settings-close-btn" class="modal-close-btn">&times;</button>
-                
-                <!-- View do Usuário -->
                 <div id="settings-view-user" class="settings-view">
                     <h2>Detalhes do Usuário</h2>
                     <div class="user-details-grid">
@@ -198,33 +1755,124 @@ main.html
                         <span>Chamados Finalizados:</span> <strong id="settings-finalizados-count">Carregando...</strong>
                     </div>
                 </div>
-
-                <!-- View de Exportação -->
-                <div id="settings-view-export" class="settings-view hidden">
-                    <h2>Exportar Dados</h2>
-                    <p>Funcionalidade em desenvolvimento (WIP). Em breve você poderá exportar seus dados em formato XML.</p>
+                <div id="settings-view-clientes" class="settings-view hidden">
+                    <div class="client-view-header">
+                        <h2>Gerenciar Clientes</h2>
+                        <button id="add-client-btn" class="btn-add-client">➕ Adicionar Cliente</button>
+                    </div>
+                    <div class="client-table-container">
+                        <table id="client-table">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>Número</th>
+                                    <th>Setor</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="client-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id="settings-view-graficos" class="settings-view hidden">
+                    <h2>Gráficos de Desempenho</h2>
+                    <div id="status-chart-container" class="chart-box">
+                        <canvas id="status-pie-chart"></canvas>
+                    </div>
+                    <div id="status-chart-legend" class="chart-legend"></div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+<div id="cliente-modal-backdrop" class="modal-backdrop hidden">
+    <div id="cliente-modal-box" class="modal-box">
+        <button id="cliente-modal-close-btn" class="modal-close-btn">&times;</button>
+        <h2 id="cliente-modal-title">Adicionar Novo Cliente</h2>
+        <form id="cliente-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
+            <input type="hidden" name="id">
+            <div class="detalhes-grid">
+                <span>Nome:</span>
+                <input name="nome" placeholder="Nome completo do cliente" required />
+                <span>Número:</span>
+                <input name="numero" placeholder="Ex: 5514912345678" pattern="[0-9]{13}" title="Apenas números, 13 dígitos (55+DDD+Número)" required />
+                <span>Setor:</span>
+                <input name="setor" placeholder="Setor do cliente (Opcional)" />
+            </div>
+            <div class="modal-buttons">
+                <button type="submit" id="cliente-form-save-btn">Salvar</button>
+            </div>
+        </form>
+    </div>
+</div>
 
-
-<!-- SCRIPTS GERAIS -->
+<!-- SCRIPTS -->
 <script src="{% static 'js/dashboard.js' %}"></script>
 <script src="{% static 'js/abertos.js' %}"></script>
 <script src="{% static 'js/chamados_finalizados.js' %}"></script>
 <script src="{% static 'js/config.js' %}"></script>
 
 <script>
-  // --- FUNÇÃO PARA PEGAR O CSRF TOKEN ---
+  // --- FUNÇÕES GLOBAIS AUXILIARES ---
+
+  function escapeHtml(text) {
+    if (typeof text !== 'string') return '';
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+  }
+
+  function niceDate(dateString) {
+    if (!dateString) return 'Data inválida';
+    const date = new Date(dateString);
+    if (isNaN(date)) return 'Data inválida';
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  }
+
+  function renderMessageContent(m) {
+    let content = '';
+    // Para documentos, não exibimos o caption separado, pois ele é o nome do arquivo.
+    const textContent = m.text && m.msg_type !== 'document' ? `<p class="media-caption">${escapeHtml(m.text)}</p>` : '';
+
+    switch (m.msg_type) {
+        case 'image':
+            content = `<div class="media-container"><img src="${m.media_file}" alt="Imagem enviada" loading="lazy"></div>${textContent}`;
+            break;
+        case 'video':
+            content = `<div class="media-container"><video src="${m.media_file}" controls></video></div>${textContent}`;
+            break;
+        case 'audio':
+            content = `<audio src="${m.media_file}" controls></audio>${textContent}`;
+            break;
+        // *** ALTERAÇÃO AQUI: Adicionado case para 'document' ***
+        case 'document':
+            // O atributo 'download' força o download ao clicar.
+            content = `<a href="${m.media_file}" class="document-link" download>
+                           <span class="document-icon">📄</span>
+                           <span class="document-name">${escapeHtml(m.text || 'Documento')}</span>
+                       </a>`;
+            break;
+        case 'text':
+        default:
+            content = `<p>${escapeHtml(m.text || '[Mensagem vazia]')}</p>`;
+            break;
+    }
+    return content;
+  }
+
   function getCsrfToken() {
-    // Busca o token no container para usuários logados, ou no form de login para não logados.
     const csrfInput = document.querySelector('#csrf-container [name="csrfmiddlewaretoken"]') || document.querySelector('#login-form [name="csrfmiddlewaretoken"]');
     return csrfInput ? csrfInput.value : '';
   }
 
-  // --- LÓGICA DO MODAL DE EDIÇÃO (CENTRALIZADA) ---
   async function showEditModal(codigo) {
     const backdrop = document.getElementById('edit-chamado-backdrop');
     const formView = document.getElementById('edit-chamado-form-view');
@@ -346,9 +1994,6 @@ main.html
     assignBtn.addEventListener('click', assignToMe);
   }
 
-  // --- LÓGICA DOS MODAIS DE CONFIRMAÇÃO ---
-
-  // Função genérica para animação de escrita
   function typeWriter(element, text, speed) {
       return new Promise((resolve) => {
           let i = 0;
@@ -369,14 +2014,34 @@ main.html
       });
   }
 
-  // Modal de Exclusão
   const deletePhrases = [
-      "Tem certeza? 😕 Apagar o chamado #{codigo} é um caminho sem volta... tipo meia perdida na máquina de lavar.",
-      "Certeza mesmo? 🧐 O chamado #{codigo} será enviado para o vácuo cósmico, de onde nada retorna.",
-      "Última chance! 😬 Clicar em 'Sim' vai deletar o chamado #{codigo} mais rápido que um piscar de olhos.",
-      "Pense bem... O histórico do chamado #{codigo} está prestes a virar poeira digital. Continuar?",
-      "Alerta! 🚨 O chamado #{codigo} será permanentemente excluído. Não temos um 'desfazer' para isso."
-  ];
+        "Tem certeza? 😕 Apagar o chamado #{codigo} é um caminho sem volta... tipo meia perdida na máquina de lavar.",
+        "Certeza mesmo? 🧐 O chamado #{codigo} será enviado para o vácuo cósmico, de onde nada retorna.",
+        "Última chance! 😬 Clicar em 'Sim' vai deletar o chamado #{codigo} mais rápido que um piscar de olhos.",
+        "Pense bem... O histórico do chamado #{codigo} está prestes a virar poeira digital. Continuar?",
+        "Alerta! 🚨 O chamado #{codigo} será permanentemente excluído. Não temos um 'desfazer' para isso.",
+        "Este chamado está prestes a entrar para o programa de proteção a testemunhas. Continuar?",
+        "Ação irreversível à frente! O chamado #{codigo} será enviado para a dimensão dos bytes perdidos.",
+        "Pressione 'Sim' para transformar o chamado #{codigo} em história. Literalmente.",
+        "O botão de 'apagar' está te encarando. Você vai mesmo fazer isso com o pobre chamado #{codigo}?",
+        "Isso não é um treinamento! O chamado #{codigo} está na contagem regressiva para a aniquilação.",
+        "Dar adeus ao chamado #{codigo}? Ele será deletado e nem uma lágrima de pixel será derramada.",
+        "Tem certeza que o chamado #{codigo} não tem mais nada a oferecer? A lixeira digital o aguarda.",
+        "Está prestes a apertar o botão vermelho do chamado #{codigo}. Confirma a operação?",
+        "O chamado #{codigo} está na prancha. Um clique e ele nada com os peixes digitais.",
+        "Apagar o chamado #{codigo} é como rasgar uma página do seu diário de trabalho. Sem dó?",
+        "O grande 'apagador' celestial foi invocado para o chamado #{codigo}. Autoriza a descida?",
+        "Se o chamado #{codigo} fosse um gênio, este seria seu último desejo. Realizar a exclusão?",
+        "Adeus, chamado #{codigo}! Sua jornada termina aqui, se você clicar em 'Sim'.",
+        "Esta ação enviará o chamado #{codigo} para um longo e tranquilo sono... eterno.",
+        "Um clique para deletar, uma vida inteira (digital) para se arrepender. Ou não. Vai apagar o #{codigo}?",
+        "O chamado #{codigo} será reciclado em zeros e uns. Prosseguir com a sustentabilidade digital?",
+        "Você é o carrasco do chamado #{codigo}. A sentença é a exclusão. Executar?",
+        "O vácuo está chamando o nome do chamado #{codigo}. Devo atender?",
+        "Essa ação tem o mesmo peso de apagar a foto com o ex. Certeza sobre o chamado #{codigo}?",
+        "Está prestes a cometer um 'chamadicídio'. O alvo é o #{codigo}. Confirma?"
+    ];
+
   function showDeleteConfirmModal(codigo) {
       const backdrop = document.getElementById('confirm-delete-backdrop');
       const title = document.getElementById('confirm-delete-title');
@@ -438,12 +2103,31 @@ main.html
       }
   }
 
-  // Modal de Finalização
   const finalizePhrases = [
-    "Pronto para encerrar o chamado #{codigo}? 🚀 O cliente agradece!",
-    "Finalizar o chamado #{codigo}? Missão (quase) cumprida. Só falta seu clique.",
-    "Bora dar baixa no chamado #{codigo}? ✔️ Mais um pra conta!",
-  ];
+      "Pronto para encerrar o chamado #{codigo}? 🚀 O cliente agradece!",
+      "Finalizar o chamado #{codigo}? Missão (quase) cumprida. Só falta seu clique.",
+      "Bora dar baixa no chamado #{codigo}? ✔️ Mais um pra conta!",
+      "Enviar o chamado #{codigo} para a prateleira de 'problemas resolvidos'?",
+      "Hora de estourar o champanhe (virtual) para o chamado #{codigo}! Finalizar?",
+      "Mais um chamado resolvido! Pode carimbar o #{codigo} como 'CONCLUÍDO'?",
+      "O cliente está sorrindo! Podemos dar baixa no chamado #{codigo}?",
+      "Este chamado lutou o bom combate. Hora do descanso no arquivo de finalizados. Fechar o #{codigo}?",
+      "Belo trabalho! Vamos adicionar o chamado #{codigo} à sua galeria de troféus?",
+      "A saga do chamado #{codigo} chegou ao fim. Confirmar o encerramento?",
+      "O problema foi domado! Finalizar a caçada ao bug do chamado #{codigo}?",
+      "O universo agradece! Menos um problema no mundo. Concluir chamado #{codigo}?",
+      "Aperte o botão e sinta a satisfação de finalizar o chamado #{codigo}.",
+      "Pronto para a glória? Finalizar o chamado #{codigo} e colher os louros.",
+      "O chamado #{codigo} está pronto para se aposentar. Concede a ele essa honra?",
+      "Checkmate! O problema do chamado #{codigo} foi vencido. Finalizar a partida?",
+      "O 'tic-tac' do relógio para o chamado #{codigo} pode parar. Confirmar finalização?",
+      "Coloque uma medalha no peito do chamado #{codigo} e o envie para os finalizados.",
+      "A luz no fim do túnel para o chamado #{codigo}! Vamos alcançá-la?",
+      "Este chamado já pode virar um case de sucesso. Finalizar o #{codigo}?",
+      "Apenas um clique para a paz de espírito. Finalizar o chamado #{codigo}?",
+      "Missão dada é missão cumprida! Encerrar a operação do chamado #{codigo}?",
+      "O chamado #{codigo} implora por um final feliz. Conceder?"
+    ];
   function showFinalizeConfirmModal(codigo) {
       const backdrop = document.getElementById('confirm-finalize-backdrop');
       const title = document.getElementById('confirm-finalize-title');
@@ -510,25 +2194,26 @@ main.html
       }
   }
 
-
-  // Scripts da Home Autenticada
-  if (document.getElementById("menu-chamados-abertos")) {
-    document.getElementById("menu-dashboard").addEventListener("click", e => { e.preventDefault(); loadDashboard(); });
-    document.getElementById("menu-chamados-abertos").addEventListener("click", e => { e.preventDefault(); loadAbertos(); });
-    document.getElementById("menu-chamados-finalizados").addEventListener("click", e => { e.preventDefault(); loadChamadosFinalizados(); });
-  }
-
-  // Script do Login
-  const form = document.getElementById('login-form');
-  if (form) {
-    form.addEventListener('submit', function (e) {
-      e.preventDefault(); document.body.classList.add('fade-zoom-out'); setTimeout(() => form.submit(), 400);
-    });
-  }
-
-  // Scripts da Barra Superior e Sidebar
   document.addEventListener('DOMContentLoaded', () => {
-    if (document.querySelector('.main-container')) { loadDashboard(); }
+    
+    {% if user.is_authenticated %}
+      document.getElementById("menu-dashboard").addEventListener("click", (e) => { e.preventDefault(); loadDashboard(); });
+      document.getElementById("menu-chamados-abertos").addEventListener("click", (e) => { e.preventDefault(); loadAbertos(); });
+      document.getElementById("menu-chamados-finalizados").addEventListener("click", (e) => { e.preventDefault(); loadChamadosFinalizados(); });
+      
+      loadDashboard();
+      
+    {% else %}
+      const loginForm = document.getElementById('login-form');
+      if (loginForm) {
+        loginForm.addEventListener('submit', function (e) {
+          e.preventDefault(); 
+          document.body.classList.add('fade-zoom-out'); 
+          setTimeout(() => loginForm.submit(), 400);
+        });
+      }
+    {% endif %}
+
     const clockElement = document.getElementById('clock');
     function updateClock() {
       if (clockElement) {
@@ -539,7 +2224,9 @@ main.html
         clockElement.textContent = `${hours}:${minutes}:${seconds}`;
       }
     }
-    setInterval(updateClock, 1000); updateClock();
+    setInterval(updateClock, 1000); 
+    updateClock();
+
     const themeToggle = document.getElementById('theme-checkbox');
     const body = document.body;
     const lightbulb = document.getElementById('lightbulb');
@@ -549,51 +2236,49 @@ main.html
         else { body.classList.remove('light-mode'); if(themeToggle) themeToggle.checked = false; }
     }
     if (currentTheme) { applyTheme(currentTheme); }
+
     function animateBulb(mode) {
         if (!lightbulb) return;
-        lightbulb.className = ''; void lightbulb.offsetWidth;
+        lightbulb.className = ''; 
+        void lightbulb.offsetWidth;
         if (mode === 'light') { lightbulb.classList.add('animate-on'); } 
         else { lightbulb.classList.add('animate-off'); }
     }
     if (themeToggle) {
         themeToggle.addEventListener('change', () => {
             let newTheme = themeToggle.checked ? 'light' : 'dark';
+            
             animateBulb(newTheme);
-            setTimeout(() => { applyTheme(newTheme); localStorage.setItem('theme', newTheme); }, 1000);
+            
+            setTimeout(() => { 
+                applyTheme(newTheme); 
+                localStorage.setItem('theme', newTheme); 
+            }, 500);
         });
     }
+
     const menuToggleBtn = document.getElementById('menu-toggle-btn');
     const sidebar = document.getElementById('sidebar');
     const mainContainer = document.getElementById('main-container');
     if (menuToggleBtn && sidebar && mainContainer) {
         let hoverTimeout;
-        menuToggleBtn.addEventListener('click', () => { sidebar.classList.toggle('sidebar-pinned'); mainContainer.classList.toggle('content-shifted'); });
-        const showSidebarOnHover = () => { clearTimeout(hoverTimeout); if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.add('sidebar-visible'); mainContainer.classList.add('content-shifted'); } };
-        const hideSidebarOnLeave = () => { hoverTimeout = setTimeout(() => { if (!sidebar.classList.contains('sidebar-pinned')) { sidebar.classList.remove('sidebar-visible'); mainContainer.classList.remove('content-shifted'); } }, 300); };
+        const showSidebarOnHover = () => { 
+            clearTimeout(hoverTimeout);
+            sidebar.classList.add('sidebar-visible');
+            mainContainer.classList.add('content-shifted'); 
+        };
+        const hideSidebarOnLeave = () => { 
+            hoverTimeout = setTimeout(() => {
+                sidebar.classList.remove('sidebar-visible');
+                mainContainer.classList.remove('content-shifted');
+            }, 300);
+        };
         menuToggleBtn.addEventListener('mouseenter', showSidebarOnHover);
         sidebar.addEventListener('mouseenter', showSidebarOnHover);
         menuToggleBtn.addEventListener('mouseleave', hideSidebarOnLeave);
         sidebar.addEventListener('mouseleave', hideSidebarOnLeave);
     }
-    const animationContainer = document.getElementById('logo-animation-container');
-    if (animationContainer) {
-        const typingText = document.getElementById('typing-text');
-        const face = document.getElementById('face-emoji');
-        const fullText = "Network Operation Center System"; 
-        let isAnimating = false;
-        const runAnimationCycle = async () => {
-            if (isAnimating) return;
-            isAnimating = true;
-            animationContainer.style.width = 'auto'; typingText.textContent = '';
-            for (let i = 0; i < fullText.length; i++) { typingText.textContent += fullText[i]; await new Promise(res => setTimeout(res, 80)); }
-            face.classList.add('animate-face');
-            await new Promise(res => setTimeout(res, 5000));
-            face.classList.remove('animate-face');
-            for (let i = fullText.length; i >= 0; i--) { face.style.transform = `translateX(${(1 - i / fullText.length) * 100}%)`; typingText.textContent = fullText.substring(0, i); await new Promise(res => setTimeout(res, 40)); }
-            animationContainer.style.width = '0'; isAnimating = false;
-        };
-        setInterval(runAnimationCycle, 60000);
-    }
+    
     const promptContainer = document.getElementById('inactive-prompt-container');
     if (promptContainer) {
         const promptText = document.getElementById('inactive-prompt-text');
@@ -620,10 +2305,14 @@ main.html
             inactivityTimer = setTimeout(showPrompt, INACTIVITY_TIME);
         };
         window.addEventListener('mousedown', resetInactivityTimer);
+        window.addEventListener('keydown', resetInactivityTimer);
         resetInactivityTimer();
     }
+
     const settingsBtn = document.getElementById('settings-btn');
-    if(settingsBtn) { settingsBtn.addEventListener('click', showSettingsModal); }
+    if(settingsBtn) { 
+        settingsBtn.addEventListener('click', showSettingsModal); 
+    }
   });
 </script>
 
@@ -652,7 +2341,7 @@ main.css
     --accent-secondary: #2563eb;
     --accent-tertiary: #facc15;
     --accent-hover: #1e40af;
-    --border-color: #2563eb;
+    --border-color: #374151;
     --shadow-color: rgba(0, 0, 0, 0.5);
     --error-color: #f87171;
     --danger-color: #ef4444;
@@ -680,7 +2369,7 @@ body.light-mode {
     --accent-secondary: #2563eb;
     --accent-tertiary: #f59e0b;
     --accent-hover: #1d4ed8;
-    --border-color: #3b82f6;
+    --border-color: #d1d5db;
     --shadow-color: rgba(0, 0, 0, 0.1);
     --error-color: #ef4444;
     --danger-color: #dc2626;
@@ -703,8 +2392,267 @@ body {
     transition: background-color 0.5s ease, color 0.5s ease;
 }
 
+
 /* =================================== */
-/* DASHBOARD                           */
+/* ESTILOS DE LOGIN E FORMULÁRIOS */
+/* =================================== */
+
+.login-page-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100vw;
+    height: 100vh;
+    padding: 0;
+    background: url("/static/css/background.svg") no-repeat center center / cover;
+}
+
+.login-box {
+    background-color: rgba(30, 41, 59, 0.85);
+    backdrop-filter: blur(10px);
+    padding: 2.5rem;
+    border-radius: 1rem;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    width: 100%;
+    max-width: 400px;
+    text-align: center;
+    border: 1px solid var(--bg-quaternary);
+}
+
+.login-box h2 {
+    color: var(--accent-primary);
+    margin-bottom: 1.5rem;
+    font-weight: 600;
+}
+
+.login-box form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+}
+
+.login-box input, 
+.detalhes-grid input,
+.detalhes-grid select,
+.detalhes-grid textarea {
+    width: 100%;
+    padding: 12px 15px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    transition: all 0.2s ease-in-out;
+}
+
+.detalhes-grid textarea {
+    resize: vertical;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+.login-box input:focus,
+.detalhes-grid input:focus,
+.detalhes-grid select:focus,
+.detalhes-grid textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.login-box button,
+#edit-chamado-save-btn,
+#cliente-form-save-btn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    background-color: var(--accent-secondary);
+    color: white;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.login-box button:hover,
+#edit-chamado-save-btn:hover:not(:disabled),
+#cliente-form-save-btn:hover:not(:disabled) {
+    background-color: var(--accent-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+}
+
+.login-box .error {
+    color: var(--error-color);
+    background-color: rgba(248, 113, 113, 0.1);
+    border: 1px solid var(--error-color);
+    padding: 10px;
+    border-radius: 8px;
+    margin-top: -10px;
+    margin-bottom: 10px;
+}
+
+.suporte-field-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.suporte-field-container select {
+    flex-grow: 1;
+}
+
+#assign-to-me-btn {
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    font-size: 1.5rem;
+    line-height: 1;
+    background-color: var(--bg-quaternary);
+    color: var(--text-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#assign-to-me-btn:hover {
+    background-color: var(--accent-primary);
+    color: white;
+    transform: scale(1.05);
+    border-color: var(--accent-primary);
+}
+
+
+/* =================================== */
+/* ESTILOS DE DASHBOARD E STATUS */
+/* =================================== */
+
+.dashboard-card.card-abertos { background-color: var(--card-blue); }
+.dashboard-card.card-finalizados { background-color: var(--card-green); }
+.dashboard-card.card-sem-atribuicao { background-color: var(--card-yellow); }
+.dashboard-card.card-atrasados { background-color: var(--card-red); }
+
+.atraso-status {
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+    color: #fff;
+    margin-left: 10px;
+    vertical-align: middle;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+}
+
+.atraso-status.ok { background-color: var(--success-color); }
+.atraso-status.atencao { background-color: var(--accent-tertiary); color: #1f2937; }
+.atraso-status.atrasado { background-color: var(--danger-color); }
+
+
+/* =================================== */
+/* ESTILOS DOS FILTROS E PESQUISA      */
+/* =================================== */
+
+.search-container {
+    display: flex;
+    align-items: center;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding-left: 5px;
+    transition: all 0.2s ease;
+}
+.search-container:focus-within {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 5px rgba(56, 189, 248, 0.3);
+}
+.search-container input[type="search"] {
+    border: none;
+    background: transparent;
+    padding: 6px 8px;
+    color: var(--text-primary);
+    outline: none;
+    width: 150px;
+}
+.search-container button {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px 8px;
+    font-size: 1.1rem;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.search-container button:hover {
+    color: var(--accent-primary);
+}
+
+
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+.page-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.filter-container {
+    position: relative;
+    display: inline-block;
+}
+.filter-popup {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 5px);
+    background-color: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--shadow-color);
+    z-index: 100;
+    width: 220px;
+    overflow: hidden;
+    animation: fadeIn 0.2s ease-out;
+}
+.filter-popup.show {
+    display: block;
+}
+.filter-options-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.filter-option {
+    padding: 10px 15px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    border-bottom: 1px solid var(--bg-tertiary);
+    text-align: left;
+}
+.filter-option:last-child {
+    border-bottom: none;
+}
+.filter-option:hover {
+    background-color: var(--bg-tertiary);
+}
+.filter-option.active {
+    background-color: var(--accent-secondary);
+    color: white;
+    font-weight: 600;
+}
+
+
+/* =================================== */
+/* DASHBOARD E GRÁFICOS                */
 /* =================================== */
 .dashboard-grid {
     display: grid;
@@ -725,6 +2673,7 @@ body {
     transform: translateY(-5px);
     box-shadow: 0 8px 25px var(--shadow-color);
 }
+
 .card-number {
     font-size: 3rem;
     font-weight: 700;
@@ -736,17 +2685,36 @@ body {
     color: var(--text-secondary);
     margin-top: 8px;
 }
-.card-wip {
-    font-size: 0.75rem;
-    font-weight: bold;
-    color: var(--danger-color);
-    margin-top: 4px;
+/* NOVOS ESTILOS PARA GRÁFICOS */
+.chart-box {
+    position: relative;
+    width: 100%;
+    max-width: 300px;
+    height: 300px;
+    margin: 0 auto;
 }
-.card-yellow { background-color: var(--card-yellow); }
-.card-green { background-color: var(--card-green); }
-.card-gray { background-color: var(--card-gray); }
-.card-red { background-color: var(--card-red); }
-.card-blue { background-color: var(--card-blue); }
+.chart-legend {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 20px;
+    padding-left: 20px;
+}
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.legend-color-box {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+}
+.legend-label {
+    font-size: 0.9rem;
+    color: var(--text-tertiary);
+}
 
 
 /* =================================== */
@@ -768,6 +2736,9 @@ body {
     transition: opacity 0.3s ease-in-out;
     pointer-events: none;
 }
+.modal-backdrop.hidden {
+    display: none;
+}
 .modal-backdrop:not(.hidden) {
     opacity: 1;
     pointer-events: auto;
@@ -779,13 +2750,9 @@ body {
     width: 90%;
     text-align: center;
     transform: scale(0.7);
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease-in-out;
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
     overflow: hidden;
     position: relative;
-}
-.modal-backdrop.hidden .modal-box {
-    opacity: 0;
-    transform: scale(0.7);
 }
 .modal-backdrop:not(.hidden) .modal-box {
     transform: scale(1);
@@ -835,7 +2802,6 @@ body {
     cursor: not-allowed;
     transform: none;
 }
-/* Animação de troca de conteúdo do modal */
 .modal-box .content-hiding {
     opacity: 0;
     transform: scale(0.95);
@@ -843,8 +2809,6 @@ body {
 .modal-box .hidden {
     display: none !important;
 }
-
-/* Modal de Exclusão e Finalização */
 #confirm-delete-box, #confirm-finalize-box { max-width: 500px; padding: 2rem; }
 #confirm-delete-box h2, #confirm-finalize-box h2 { min-height: 5rem; }
 #confirm-delete-title span.cursor, #confirm-finalize-title span.cursor { display: inline-block; background-color: var(--accent-primary); width: 3px; height: 1.4rem; margin-left: 2px; vertical-align: middle; animation: blink 1s infinite; }
@@ -854,15 +2818,11 @@ body {
 #confirm-delete-yes-btn:hover { background-color: var(--danger-hover); transform: translateY(-2px); }
 #confirm-finalize-yes-btn { background-color: var(--success-color); color: white; }
 #confirm-finalize-yes-btn:hover { background-color: var(--success-hover); transform: translateY(-2px); }
-
-
-/* Modal de Edição */
 #edit-chamado-box { max-width: 550px; padding: 2rem; }
-#edit-chamado-save-btn { background-color: var(--accent-secondary); color: white; }
-#edit-chamado-save-btn:hover:not(:disabled) { background-color: var(--accent-hover); transform: translateY(-2px); }
-
-/* Modal de Configurações */
 #settings-box { max-width: 800px; padding: 0; text-align: left; }
+#settings-box.chart-view-active {
+    max-width: 1000px;
+}
 .settings-container { display: flex; min-height: 400px; }
 .settings-container.fade-in { animation: fadeIn 0.4s 0.2s ease-in-out forwards; opacity: 0; }
 .settings-sidebar { width: 200px; background-color: var(--bg-secondary); padding: 1.5rem; border-right: 1px solid var(--bg-tertiary); }
@@ -877,1097 +2837,650 @@ body {
 .user-details-grid span:nth-child(odd) { font-weight: 600; color: var(--text-secondary); text-align: right; }
 .user-details-grid strong { color: var(--text-primary); }
 .user-details-grid hr { grid-column: span 2; border: 0; border-top: 1px solid var(--bg-tertiary); margin: 1rem 0; }
+#cliente-modal-box { max-width: 500px; padding: 2rem; }
+.client-view-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+.btn-add-client {
+    background-color: var(--success-color);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+.btn-add-client:hover {
+    background-color: var(--success-hover);
+}
+.client-table-container {
+    max-height: 350px;
+    overflow-y: auto;
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+}
+#client-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+}
+#client-table th, #client-table td {
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--bg-tertiary);
+}
+#client-table th {
+    background-color: var(--bg-secondary);
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+}
+#client-table td {
+    color: var(--text-tertiary);
+}
+#client-table tr:last-child td {
+    border-bottom: none;
+}
+#client-table tr:hover {
+    background-color: var(--bg-tertiary);
+}
+.client-actions {
+    display: flex;
+    gap: 10px;
+}
+.btn-client-edit, .btn-client-delete {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: transform 0.2s, color 0.2s;
+}
+.btn-client-edit { color: var(--accent-primary); }
+.btn-client-edit:hover { transform: scale(1.2); }
+.btn-client-delete { color: var(--danger-color); }
+.btn-client-delete:hover { transform: scale(1.2); }
+
 
 /* =================================== */
-/* NOVA ANIMAÇÃO DE INATIVIDADE        */
+/* COMPONENTES GLOBAIS (BARRA SUPERIOR)*/
+ /* =================================== */
+.top-bar { 
+    position: fixed; 
+    top: 0; 
+    left: 0; 
+    right: 0; 
+    height: 3.5rem; 
+    background-color: var(--bg-primary); 
+    color: var(--accent-primary); 
+    display: flex; 
+    justify-content: space-between; 
+    align-items: center; 
+    padding: 0 1.5rem; 
+    z-index: 100; 
+    box-shadow: 0 2px 8px var(--shadow-color); 
+}
+.top-bar-left { 
+    display: flex; 
+    align-items: center; 
+    gap: 1rem; 
+    overflow: hidden; 
+    flex-shrink: 1; 
+}
+.menu-toggle-btn, #settings-btn { 
+    background: none; 
+    border: none; 
+    cursor: pointer; 
+    padding: 8px; 
+    color: var(--accent-primary); 
+    transition: color 0.2s, transform 0.2s; 
+}
+.menu-toggle-btn span { 
+    display: block; 
+    width: 22px; 
+    height: 3px; 
+    background-color: var(--accent-primary); 
+    border-radius: 2px; 
+    transition: transform 0.3s ease, opacity 0.3s ease; 
+}
+#settings-btn { 
+    font-size: 1.5rem; 
+    display: flex; 
+    align-items: center; 
+}
+#settings-btn:hover { 
+    transform: scale(1.1) rotate(15deg); 
+}
+.logo-login { 
+    font-weight: bold; 
+    font-size: 1.5rem; 
+    white-space: nowrap; 
+}
+.top-bar-right { 
+    display: flex; 
+    align-items: center; 
+    gap: 1rem; 
+}
+.clock { 
+    font-family: monospace; 
+    font-size: 1rem; 
+    white-space: nowrap; 
+    color: var(--text-primary); 
+}
+.theme-switch-wrapper { 
+    display: flex; 
+    align-items: center; 
+}
+.theme-switch { 
+    position: relative; 
+    display: inline-block; 
+    width: 50px; 
+    height: 26px; 
+}
+.theme-switch input { 
+    opacity: 0; 
+    width: 0; 
+    height: 0; 
+}
+.slider { 
+    position: absolute; 
+    cursor: pointer; 
+    top: 0; 
+    left: 0; 
+    right: 0; 
+    bottom: 0; 
+    background-color: #374151; 
+    transition: .4s; 
+}
+.slider:before { 
+    position: absolute; 
+    content: ""; 
+    height: 18px; 
+    width: 18px; 
+    left: 4px; 
+    bottom: 4px; 
+    background-color: white; 
+    transition: .4s; 
+}
+input:checked + .slider { 
+    background-color: var(--accent-secondary); 
+}
+input:checked + .slider:before { 
+    transform: translateX(24px); 
+}
+.slider.round { 
+    border-radius: 34px; 
+}
+.slider.round:before { 
+    border-radius: 50%; 
+}
+
+/* =================================== */
+/* LAYOUTS DAS TELAS */
+/* =================================== */
+.main-container { 
+    display: flex; 
+    width: 100%; 
+    padding-top: 3.5rem; 
+    height: 100vh; 
+    transition: margin-left 0.4s ease-in-out; 
+}
+.main-container.content-shifted { 
+    margin-left: var(--sidebar-width); 
+}
+
+/* =================================== */
+/* ESTILOS DA HOME (SIDEBAR, CONTENT, ETC) */
+/* =================================== */
+.sidebar { 
+    position: fixed; 
+    left: 0; 
+    top: 3.5rem; 
+    height: calc(100vh - 3.5rem); 
+    width: var(--sidebar-width); 
+    background-color: var(--bg-primary); 
+    display: flex; 
+    flex-direction: column; 
+    padding: 20px 0; 
+    box-shadow: 2px 0 8px var(--shadow-color); 
+    transform: translateX(-100%); 
+    transition: transform 0.4s ease-in-out; 
+    z-index: 90; 
+}
+.sidebar.sidebar-visible { 
+    transform: translateX(0); 
+}
+.sidebar .logo { 
+    display: flex; 
+    align-items: center; 
+    gap: 10px; 
+    font-size: 1.5em; 
+    font-weight: bold; 
+    margin-bottom: 30px; 
+    padding: 0 20px; 
+    color: var(--accent-primary); 
+}
+.sidebar-logo-img { 
+    width: 32px; 
+    height: 32px; 
+    object-fit: contain; 
+}
+.menu { 
+    list-style: none; 
+    display: flex; 
+    flex-direction: column; 
+    gap: 10px; 
+    padding: 0; 
+    margin: 0; 
+}
+.menu li a { 
+    color: var(--text-tertiary); 
+    text-decoration: none; 
+    transition: all 0.2s ease-in-out; 
+    padding: 14px 20px; 
+    display: block; 
+}
+.menu li a:hover { 
+    background-color: var(--bg-quaternary); 
+    color: var(--text-primary); 
+}
+.content { 
+    flex: 1; 
+    padding: 40px; 
+    width: 100%; 
+    overflow-y: auto; 
+    opacity: 0;
+    transition: opacity 0.5s ease-in-out;
+}
+.content.content-fade-in {
+    opacity: 1;
+}
+.content.content-fade-out {
+    opacity: 0;
+}
+
+@keyframes fadeIn { 
+    from { opacity: 0; transform: translateY(10px); } 
+    to { opacity: 1; transform: translateY(0); } 
+}
+@keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+/* =================================== */
+/* NOVO ESTILO DOS CHAMADOS            */
+/* =================================== */
+.chamado { 
+    background-color: var(--bg-primary); 
+    border-radius: 8px; 
+    margin-bottom: 12px; 
+    box-shadow: 0 2px 10px var(--shadow-color); 
+    transition: background 0.3s ease; 
+    overflow: hidden; 
+}
+.chamado-header { 
+    display: flex; 
+    align-items: center; 
+    justify-content: space-between; 
+    padding: 12px 18px; 
+    cursor: pointer; 
+    border-left: 4px solid var(--accent-primary); 
+    gap: 16px; 
+}
+.chamado-header:hover { 
+    background-color: var(--bg-tertiary); 
+}
+.chamado-info { 
+    display: flex; 
+    align-items: center; 
+    gap: 16px; 
+    flex-wrap: nowrap; 
+    flex-grow: 1; 
+    overflow: hidden; 
+}
+.chamado-codigo { 
+    font-size: 1em; 
+    font-weight: bold; 
+    color: var(--text-primary); 
+    white-space: nowrap; 
+    flex-shrink: 0; 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+}
+.chamado-alerta { 
+    animation-duration: 1.5s; 
+    animation-iteration-count: infinite; 
+    animation-timing-function: ease-in-out; 
+}
+.chamado-alerta.alert-gray { 
+    animation-name: pulse-gray; 
+}
+.chamado-alerta.alert-blue { 
+    animation-name: pulse-blue; 
+}
+@keyframes pulse-gray { 
+    0%, 100% { 
+        color: #9ca3af; 
+        text-shadow: 0 0 5px #9ca3af44; 
+    } 
+    50% { 
+        color: #e5e7eb; 
+        text-shadow: 0 0 15px #e5e7ebaa; 
+    } 
+}
+@keyframes pulse-blue { 
+    0%, 100% { 
+        color: #60a5fa; 
+        text-shadow: 0 0 5px #60a5fa44; 
+    } 
+    50% { 
+        color: #dbeafe; 
+        text-shadow: 0 0 15px #dbeafeaa; 
+    } 
+}
+.chamado-resumo { 
+    color: var(--text-secondary); 
+    white-space: nowrap; 
+    overflow: hidden; 
+    text-overflow: ellipsis; 
+    flex-shrink: 1; 
+    min-width: 50px; 
+}
+.chamado-info-dates { 
+    font-size: 0.85em; 
+    color: var(--text-secondary); 
+    display: flex; 
+    gap: 12px; 
+    white-space: nowrap; 
+    margin-left: auto; 
+    flex-shrink: 0; 
+}
+.chamado-actions { 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    flex-shrink: 0; 
+}
+.chamado-actions .botao-mostrar { 
+    background-color: var(--accent-secondary); 
+    color: white; 
+    border: none; 
+    padding: 6px 14px; 
+    border-radius: 5px; 
+    font-weight: 600; 
+    transition: background-color 0.2s ease; 
+}
+.chamado-actions .botao-mostrar:hover { 
+    background-color: var(--accent-hover); 
+}
+.botao-apagar { 
+    background: none; 
+    border: none; 
+    font-size: 1.2rem; 
+    cursor: pointer; 
+    color: var(--text-secondary); 
+    transition: color 0.2s, transform 0.2s; 
+}
+.botao-apagar:hover { 
+    color: var(--danger-color); 
+    transform: scale(1.2); 
+}
+.botao-finalizar { 
+    background: none; 
+    border: none; 
+    font-size: 1.2rem; 
+    cursor: pointer; 
+    color: var(--text-secondary); 
+    transition: color 0.2s, transform 0.2s; 
+}
+.botao-finalizar:hover { 
+    color: var(--success-color); 
+    transform: scale(1.2); 
+}
+.botao-editar { 
+    background: none; 
+    border: none; 
+    font-size: 1.1rem; 
+    cursor: pointer; 
+    color: var(--text-secondary); 
+    transition: color 0.2s, transform 0.2s; 
+    padding: 0 4px; 
+}
+.botao-editar:hover { 
+    color: var(--accent-primary); 
+    transform: scale(1.2); 
+}
+.chamado-detalhes { 
+    display: none; 
+    padding: 20px; 
+    background-color: var(--bg-tertiary); 
+    border-top: 1px solid var(--bg-quaternary); 
+}
+.conversa-container { 
+    max-height: 350px; 
+    overflow-y: auto; 
+    border: 1px solid var(--bg-quaternary); 
+    padding: 14px 8px; 
+    border-radius: 10px; 
+    display: flex; 
+    flex-direction: column; 
+    gap: 10px; 
+    background: var(--bg-secondary); 
+    margin-bottom: 20px; 
+}
+.mensagem { 
+    padding: 10px 14px; 
+    border-radius: 16px; 
+    max-width: 72%; 
+    min-width: 90px; 
+    white-space: pre-wrap; 
+    font-size: 1.03em; 
+    box-shadow: 0 1px 2px rgba(0,0,0,0.16); 
+    position: relative; 
+    display: flex; 
+    flex-direction: column; 
+}
+.mensagem.suporte { 
+    background: var(--accent-secondary); 
+    color:#fff; 
+    align-self: flex-end; 
+}
+.mensagem.cliente { 
+    background: var(--bg-quaternary); 
+    color: var(--text-primary); 
+    align-self: flex-start; 
+}
+.mensagem-header { 
+    display:flex; 
+    justify-content:space-between; 
+    font-size:12px; 
+    font-weight:600; 
+    margin-bottom:4px; 
+    user-select:none; 
+}
+.mensagem-header span:last-child { 
+    opacity: .75; 
+}
+
+/* --- ESTILOS PARA MÍDIA E DOCUMENTOS --- */
+.mensagem .media-container {
+    max-width: 300px;
+}
+.mensagem img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.2s;
+    display: block;
+}
+.mensagem img:hover {
+    transform: scale(1.05);
+}
+.media-caption {
+    font-size: 0.9em;
+    padding-top: 5px;
+    opacity: 0.9;
+    white-space: normal;
+}
+.mensagem audio {
+    width: 100%;
+    max-width: 250px;
+    height: 40px;
+    margin-top: 5px;
+}
+.mensagem video {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    display: block;
+}
+
+/* *** ALTERAÇÃO AQUI: Adicionado estilo para links de documentos *** */
+.document-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background-color: rgba(0,0,0,0.2);
+    padding: 8px 12px;
+    border-radius: 8px;
+    text-decoration: none;
+    color: inherit;
+    transition: background-color 0.2s ease;
+}
+.document-link:hover {
+    background-color: rgba(0,0,0,0.4);
+}
+.document-icon {
+    font-size: 1.5rem;
+}
+.document-name {
+    font-weight: 500;
+    word-break: break-all;
+}
+
+/* =================================== */
+/* ESTILOS DA ANIMAÇÃO DE INATIVIDADE  */
 /* =================================== */
 #inactive-prompt-container {
     position: fixed;
     bottom: 20px;
     right: 20px;
-    z-index: 9999;
+    z-index: 10001;
     display: flex;
     align-items: flex-end;
-    gap: 10px;
+    gap: 15px;
     opacity: 0;
-    transform: translateX(50px);
+    transform: translateY(20px);
     transition: opacity 0.5s ease, transform 0.5s ease;
     pointer-events: none;
 }
 #inactive-prompt-container.visible {
     opacity: 1;
-    transform: translateX(0);
-    pointer-events: auto;
+    transform: translateY(0);
 }
 #inactive-prompt-container.hiding {
     opacity: 0;
-    transform: translateX(50px);
+    transform: translateY(20px);
 }
 .prompt-character {
-    font-size: 5rem;
+    font-size: 4rem;
     transform: scaleX(-1);
 }
 .speech-bubble {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
+    background-color: var(--bg-primary);
     padding: 15px 20px;
-    border-radius: 15px;
-    max-width: 200px;
-    box-shadow: 0 4px 12px var(--shadow-color);
+    border-radius: 20px;
+    max-width: 250px;
+    box-shadow: 0 4px 15px var(--shadow-color);
     position: relative;
-    margin-bottom: 20px;
-    font-weight: 500;
+    border: 2px solid var(--accent-primary);
 }
 .speech-bubble::after {
     content: '';
     position: absolute;
-    bottom: 0;
+    bottom: 10px;
     right: -15px;
     width: 0;
     height: 0;
-    border: 20px solid transparent;
-    border-left-color: var(--bg-tertiary);
+    border: 15px solid transparent;
+    border-left-color: var(--accent-primary);
+    border-right: 0;
     border-bottom: 0;
-    margin-top: -10px;
-    margin-right: -20px;
+    margin-top: -7.5px;
+    margin-right: -7.5px;
+}
+.speech-bubble p {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--text-primary);
 }
 
-/* =================================== */
-/* COMPONENTES GLOBAIS (BARRA SUPERIOR)*/
-/* =================================== */
-.top-bar { position: fixed; top: 0; left: 0; right: 0; height: 3.5rem; background-color: var(--bg-primary); color: var(--accent-primary); display: flex; justify-content: space-between; align-items: center; padding: 0 1.5rem; z-index: 100; box-shadow: 0 2px 8px var(--shadow-color); }
-.top-bar-left { display: flex; align-items: center; gap: 1rem; overflow: hidden; flex-shrink: 1; }
-.menu-toggle-btn, #settings-btn { background: none; border: none; cursor: pointer; padding: 8px; color: var(--accent-primary); transition: color 0.2s, transform 0.2s; }
-.menu-toggle-btn span { display: block; width: 22px; height: 3px; background-color: var(--accent-primary); border-radius: 2px; transition: transform 0.3s ease, opacity 0.3s ease; }
-#settings-btn { font-size: 1.5rem; display: flex; align-items: center; }
-#settings-btn:hover { transform: scale(1.1) rotate(15deg); }
-.logo-login { font-weight: bold; font-size: 1.5rem; white-space: nowrap; }
-#logo-animation-container { display: flex; align-items: center; font-size: 1.5rem; font-weight: bold; white-space: nowrap; width: 0; color: var(--text-primary); vertical-align: middle; }
-#typing-text { display: inline-block; }
-#blinking-cursor { display: inline-block; background-color: var(--accent-primary); width: 2px; height: 1.4rem; margin-left: 1px; vertical-align: middle; animation: blink 1s infinite; }
-@keyframes blink { from, to { opacity: 1; } 50% { opacity: 0; } }
-#face-emoji { display: none; align-items: center; justify-content: center; position: relative; width: 28px; height: 28px; background-color: #facc15; border-radius: 50%; margin-left: 8px; opacity: 0; }
-#face-emoji.animate-face { display: inline-flex; animation: peek-look-wink-corrected 5s ease-in-out forwards; }
-.face-eye { position: absolute; width: 4px; height: 5px; background-color: var(--bg-primary); border-radius: 50%; top: 9px; }
-.face-eye.left { left: 7px; }
-.face-eye.right { right: 7px; }
-.face-mouth { position: absolute; width: 10px; height: 5px; border-bottom: 2px solid var(--bg-primary); border-radius: 0 0 5px 5px; bottom: 6px; }
-@keyframes peek-look-wink-corrected { 0% { opacity: 0; transform: translateY(20px); } 20% { opacity: 1; transform: translateY(0); } 30% {} 40% { transform: translateX(-3px); } 50% {} 60% { transform: translateX(3px); } 70% { transform: translateX(0); } 75% { transform: scaleY(0.1) translateX(0); } 80% { transform: scaleY(1) translateX(0); } 90% { opacity: 1; } 100% { opacity: 0; } }
-#face-emoji.animate-face .face-eye { animation: eye-movement-corrected 5s ease-in-out forwards; }
-@keyframes eye-movement-corrected { 0%, 30%, 70%, 100% { transform: translateY(0); } 40%, 60% { transform: translateY(4px); } }
-.top-bar-right { display: flex; align-items: center; gap: 1rem; }
-.clock { font-family: monospace; font-size: 1rem; white-space: nowrap; color: var(--text-primary); }
-.theme-switch-wrapper { display: flex; align-items: center; }
-.theme-switch { position: relative; display: inline-block; width: 50px; height: 26px; }
-.theme-switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #374151; transition: .4s; }
-.slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
-input:checked+.slider { background-color: var(--accent-secondary); }
-input:checked+.slider:before { transform: translateX(24px); }
-.slider.round { border-radius: 34px; }
-.slider.round:before { border-radius: 50%; }
-#lightbulb-anim-container { position: fixed; top: 3.5rem; left: 50%; transform: translateX(-50%); width: 60px; height: 300px; z-index: 99; pointer-events: none; }
-#lightbulb { font-size: 40px; position: absolute; top: -100px; left: 0; opacity: 0; }
-#lightbulb.animate-on { animation: dropAndGlow 2s ease-in-out forwards; }
-#lightbulb.animate-off { animation: dropAndFade 2s ease-in-out forwards; }
-@keyframes dropAndGlow { 0% { top: -100px; opacity: 0; } 40% { top: 100px; opacity: 1; text-shadow: none; } 50% { top: 100px; opacity: 1; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 100% { top: -100px; opacity: 0; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } }
-@keyframes dropAndFade { 0% { top: -100px; opacity: 0; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 40% { top: 100px; opacity: 1; text-shadow: 0 0 25px #fef08a, 0 0 40px #fde047; } 50% { top: 100px; opacity: 1; text-shadow: none; } 100% { top: -100px; opacity: 0; text-shadow: none; } }
 
 /* =================================== */
-/* LAYOUTS DAS TELAS */
+/* ESTILOS DA ANIMAÇÃO DA LÂMPADA      */
 /* =================================== */
-.main-container { display: flex; width: 100%; padding-top: 3.5rem; height: 100vh; transition: margin-left 0.4s ease-in-out; }
-.main-container.content-shifted { margin-left: var(--sidebar-width); }
-.login-page-container { display: flex; justify-content: center; align-items: center; width: 100vw; height: 100vh; padding-top: 3.5rem; }
+#lightbulb-anim-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 150px;
+    display: flex;
+    justify-content: center;
+    z-index: 101;
+    pointer-events: none;
+}
+#lightbulb {
+    font-size: 2.5rem;
+    position: absolute;
+    opacity: 0;
+}
+#lightbulb.animate-on, #lightbulb.animate-off {
+    animation-duration: 1s;
+    animation-timing-function: ease-in-out;
+}
+#lightbulb.animate-on { 
+    animation-name: animate-on; 
+}
+#lightbulb.animate-off { 
+    animation-name: animate-off; 
+}
+
+@keyframes animate-on {
+    0%   { transform: translateY(-100px); opacity: 0; }
+    50%  { transform: translateY(60px); opacity: 1; text-shadow: 0 0 25px yellow, 0 0 35px yellow; }
+    100% { transform: translateY(-100px); opacity: 0; text-shadow: none; }
+}
+
+@keyframes animate-off {
+    0%   { transform: translateY(-100px); opacity: 0; text-shadow: none; }
+    50%  { transform: translateY(60px); opacity: 1; text-shadow: none; }
+    100% { transform: translateY(-100px); opacity: 0; }
+}
+
 
 /* =================================== */
-/* ESTILOS DA HOME (SIDEBAR, CONTENT, ETC) */
+/* Animações e Efeitos Gerais          */
 /* =================================== */
-.sidebar { position: fixed; left: 0; top: 3.5rem; height: calc(100vh - 3.5rem); width: var(--sidebar-width); background-color: var(--bg-primary); display: flex; flex-direction: column; padding: 20px 0; box-shadow: 2px 0 8px var(--shadow-color); transform: translateX(-100%); transition: transform 0.4s ease-in-out; z-index: 90; }
-.sidebar.sidebar-visible, .sidebar.sidebar-pinned { transform: translateX(0); }
-.sidebar .logo { display: flex; align-items: center; gap: 10px; font-size: 1.5em; font-weight: bold; margin-bottom: 30px; padding: 0 20px; color: var(--accent-primary); }
-.sidebar-logo-img { width: 32px; height: 32px; object-fit: contain; }
-.menu { list-style: none; display: flex; flex-direction: column; gap: 10px; padding: 0; margin: 0; }
-.menu li a { color: var(--text-tertiary); text-decoration: none; transition: all 0.2s ease-in-out; padding: 14px 20px; display: block; }
-.menu li a:hover { background-color: var(--bg-quaternary); color: var(--text-primary); }
-.content { flex: 1; padding: 40px; width: 100%; overflow-y: auto; }
-.content h1 { font-size: 2.5em; margin-bottom: 15px; color: var(--accent-tertiary); }
-.content p { font-size: 1.2em; color: var(--text-secondary); }
 
-/* =================================== */
-/* NOVO ESTILO DOS CHAMADOS            */
-/* =================================== */
-.chamado { background-color: var(--bg-primary); border-radius: 8px; margin-bottom: 12px; box-shadow: 0 2px 10px var(--shadow-color); transition: background 0.3s ease; overflow: hidden; }
-.chamado-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; cursor: pointer; border-left: 4px solid var(--accent-primary); gap: 16px; }
-.chamado-header:hover { background-color: var(--bg-tertiary); }
-.chamado-info { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; flex-grow: 1; overflow: hidden; }
-.chamado-codigo { font-size: 1em; font-weight: bold; color: var(--text-primary); white-space: nowrap; flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
-.chamado-alerta { animation-duration: 1.5s; animation-iteration-count: infinite; animation-timing-function: ease-in-out; }
-.chamado-alerta.alert-gray { animation-name: pulse-gray; }
-.chamado-alerta.alert-blue { animation-name: pulse-blue; }
-@keyframes pulse-gray { 0%, 100% { color: #9ca3af; text-shadow: 0 0 5px #9ca3af44; } 50% { color: #e5e7eb; text-shadow: 0 0 15px #e5e7ebaa; } }
-@keyframes pulse-blue { 0%, 100% { color: #60a5fa; text-shadow: 0 0 5px #60a5fa44; } 50% { color: #dbeafe; text-shadow: 0 0 15px #dbeafeaa; } }
-.chamado-resumo { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 50px; }
-.chamado-info-dates { font-size: 0.85em; color: var(--text-secondary); display: flex; gap: 12px; white-space: nowrap; margin-left: auto; flex-shrink: 0; }
-.chamado-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.chamado-actions .botao-mostrar { background-color: var(--accent-secondary); color: white; border: none; padding: 6px 14px; border-radius: 5px; font-weight: 600; transition: background-color 0.2s ease; }
-.chamado-actions .botao-mostrar:hover { background-color: var(--accent-hover); }
-.botao-apagar { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-secondary); transition: color 0.2s, transform 0.2s; }
-.botao-apagar:hover { color: var(--danger-color); transform: scale(1.2); }
-.botao-finalizar { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--text-secondary); transition: color 0.2s, transform 0.2s; }
-.botao-finalizar:hover { color: var(--success-color); transform: scale(1.2); }
-.botao-editar { background: none; border: none; font-size: 1.1rem; cursor: pointer; color: var(--text-secondary); transition: color 0.2s, transform 0.2s; padding: 0 4px; }
-.botao-editar:hover { color: var(--accent-primary); transform: scale(1.2); }
-.chamado-detalhes { display: none; padding: 20px; background-color: var(--bg-tertiary); border-top: 1px solid var(--bg-quaternary); }
-.conversa-container { max-height: 350px; overflow-y: auto; border: 1px solid var(--bg-quaternary); padding: 14px 8px; border-radius: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-secondary); margin-bottom: 20px; }
-.mensagem { padding: 10px 14px; border-radius: 16px; max-width: 72%; min-width: 90px; white-space: pre-wrap; font-size: 1.03em; box-shadow: 0 1px 2px rgba(0,0,0,0.16); position: relative; display: flex; flex-direction: column; }
-.mensagem.suporte { background: var(--accent-secondary); color:#fff; align-self: flex-end; }
-.mensagem.cliente { background: var(--bg-quaternary); color: var(--text-primary); align-self: flex-start; }
-.mensagem-header { display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:4px; user-select:none; }
-.mensagem-header span:last-child { opacity: .75; }
-.detalhes-suporte-container { margin-top: 13px; padding: 18px 12px 12px 16px; border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 2px 12px rgba(0,0,0,0.2); }
-.detalhes-grid { display: grid; grid-template-columns: 120px 1fr; gap: 10px 14px; align-items: center; }
-.detalhes-grid span { color: var(--accent-primary); font-weight: 500; opacity: 0.9; text-align: right; }
-.detalhes-grid input, .detalhes-grid textarea, .detalhes-grid select { background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--bg-quaternary); border-radius: 5px; padding: 8px 10px; width: 100%; font-family: inherit; font-size: 1rem; }
-.detalhes-grid input[readonly], .detalhes-grid textarea[readonly] { background: var(--bg-tertiary); color: var(--text-secondary); cursor: not-allowed; }
-.detalhes-grid textarea { resize: vertical; }
-.suporte-field-container { display: flex; align-items: center; gap: 8px; }
-#assign-to-me-btn { background: none; border: 1px solid var(--bg-quaternary); color: var(--text-primary); font-size: 1.2rem; cursor: pointer; padding: 4px 8px; border-radius: 5px; line-height: 1; transition: background-color 0.2s, border-color 0.2s; }
-#assign-to-me-btn:hover { background-color: var(--bg-tertiary); border-color: var(--accent-primary); }
-
-/* =================================== */
-/* ESTILOS DO LOGIN (CAIXA, FORM, ETC) */
-/* =================================== */
-.login-box { position: relative; background-color: var(--bg-primary); color: var(--text-primary); padding: 2rem; border-radius: 10px; width: 320px; max-width: 90vw; box-shadow: 0 4px 12px var(--shadow-color); z-index: 101; transition: background-color 0.5s ease, color 0.5s ease; }
-.titlelogin { text-align: center; margin-bottom: 1rem; font-size: 1.5rem; color: var(--accent-tertiary); }
-.login-box form { display: flex; flex-direction: column; }
-.login-box input, .login-box button { width: 100%; padding: 0.75rem; margin: 0.5rem 0; border: none; border-radius: 5px; font-size: 1rem; }
-.login-box input { background-color: var(--bg-tertiary); color: var(--text-primary); transition: background-color 0.5s ease; }
-.login-box input::placeholder { color: var(--text-secondary); }
-.login-box input:focus { outline: 2px solid var(--accent-secondary); background-color: var(--bg-quaternary); color: var(--text-primary); }
-.login-box button { background-color: var(--accent-secondary); color: #fff; cursor: pointer; font-weight: 600; transition: background-color 0.2s ease-in-out; }
-.login-box button:hover { background-color: var(--accent-hover); }
-.error { color: var(--error-color); font-size: 0.9rem; text-align: center; margin-bottom: 0.5rem; }
-
-/* Animações de Fade/Zoom */
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes slideIn { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 .fade-zoom-in { animation: fadeZoomIn 0.5s ease forwards; }
 .fade-zoom-out { animation: fadeZoomOut 0.4s ease forwards; }
 .fade-slide-down { animation: fadeSlideDown 0.6s ease forwards; }
-@keyframes fadeZoomIn { 0% { opacity: 0; transform: scale(0.9); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes fadeZoomOut { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0.9); } }
-@keyframes fadeSlideDown { 0% { opacity: 0; transform: translateY(-20px); } 100% { opacity: 1; transform: translateY(0); } }
 
-models.py
-
-from django.db import models
-
-class WhatsappSlot(models.Model):
-    conversation_key = models.CharField(max_length=100)
-    contact_name = models.CharField(max_length=150, blank=True, null=True)
-    text = models.TextField()
-    username = models.CharField(max_length=100)
-    duration = models.IntegerField(default=0)
-
-    suporte = models.CharField(max_length=100, blank=True, null=True)
-    cliente = models.CharField(max_length=100, blank=True, null=True)
-    resumo = models.CharField(max_length=200, blank=True, null=True)
-    problema = models.TextField(blank=True, null=True)
-    indicador = models.CharField(max_length=100, blank=True, null=True)
-    tempo_solucao = models.CharField(max_length=100, blank=True, null=True)
-    solucao = models.TextField(blank=True, null=True) # <-- ADICIONADO
-    setor = models.CharField(max_length=100, blank=True, null=True) # <-- ADICIONADO
-
-    chamadofinalizado = models.BooleanField(default=False)
-    codigo_chamado = models.CharField(max_length=100, blank=True, null=True)
-
-    criado_em = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.conversation_key} - {self.criado_em.strftime('%d/%m %H:%M')}"
-
-views.py
-
-from django.shortcuts import render, redirect
-from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.decorators import login_required
-from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework import status
-from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.authentication import SessionAuthentication
-from django.db.models import Max, Q, IntegerField
-from django.db.models.functions import Cast
-from .models import WhatsappSlot
-from .serializers import WhatsappSlotSerializer
-from django.contrib.auth.models import User
-from django.utils import timezone
-
-def format_timespan(td):
-    days = td.days
-    hours, remainder = divmod(td.seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    parts = []
-    if days > 0:
-        parts.append(f"{days} dia{'s' if days > 1 else ''}")
-    if hours > 0:
-        parts.append(f"{hours} hora{'s' if hours > 1 else ''}")
-    if minutes > 0:
-        parts.append(f"{minutes} minuto{'s' if minutes > 1 else ''}")
-    return ", ".join(parts) if parts else "Menos de um minuto"
-
-@api_view(['GET'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def get_dashboard_stats(request):
-    total_abertos = WhatsappSlot.objects.filter(chamadofinalizado=False).values('codigo_chamado').distinct().count()
-    total_finalizados = WhatsappSlot.objects.filter(chamadofinalizado=True).values('codigo_chamado').distinct().count()
-    abertos_sem_atribuicao = WhatsappSlot.objects.filter(chamadofinalizado=False, suporte__isnull=True).values('codigo_chamado').distinct().count()
-    finalizados_sem_atribuicao = WhatsappSlot.objects.filter(chamadofinalizado=True, suporte__isnull=True).values('codigo_chamado').distinct().count()
-    atrasados = 0 
-    data = {
-        'total_abertos': total_abertos,
-        'total_finalizados': total_finalizados,
-        'abertos_sem_atribuicao': abertos_sem_atribuicao,
-        'finalizados_sem_atribuicao': finalizados_sem_atribuicao,
-        'atrasados': atrasados,
-    }
-    return Response(data, status=status.HTTP_200_OK)
-
-@api_view(['GET'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def get_all_users(request):
-    users = User.objects.all().order_by('username').values_list('username', flat=True)
-    return Response(list(users), status=status.HTTP_200_OK)
-
-@api_view(['GET'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def get_user_stats(request):
-    user = request.user
-    finalizados_count = WhatsappSlot.objects.filter(
-        chamadofinalizado=True, 
-        codigo_chamado__isnull=False,
-        suporte=user.username
-    ).values('codigo_chamado').distinct().count()
-    data = {
-        "username": user.username,
-        "email": user.email,
-        "full_name": user.get_full_name(),
-        "date_joined": user.date_joined,
-        "finalizados_count": finalizados_count,
-    }
-    return Response(data, status=status.HTTP_200_OK)
-
-@api_view(['PATCH'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def atualizar_chamado(request, codigo):
-    if not codigo:
-        return Response({"detail": "Código do chamado não fornecido."}, status=status.HTTP_400_BAD_REQUEST)
-    
-    slots_do_chamado = WhatsappSlot.objects.filter(codigo_chamado=codigo)
-    if not slots_do_chamado.exists():
-        return Response({"detail": f"Nenhum registro encontrado para o chamado #{codigo}."}, status=status.HTTP_404_NOT_FOUND)
-
-    # --- INÍCIO DA CORREÇÃO ---
-    # A lógica foi alterada para atualizar SOMENTE o último registro (slot) do chamado.
-    # O método .update() em massa foi substituído por .save() em um único objeto.
-    
-    # 1. Isolar o último registro, que contém os metadados do chamado.
-    ultimo_slot = slots_do_chamado.order_by('-criado_em').first()
-    if not ultimo_slot:
-        return Response({"detail": "Não foi possível encontrar o registro principal do chamado."}, status=status.HTTP_404_NOT_FOUND)
-
-    update_data = request.data
-    # 2. Proteger campos que não devem ser editados manualmente.
-    update_data.pop('cliente', None)
-    update_data.pop('tempo_solucao', None)
-    
-    # 3. Aplicar as alterações ao objeto do último slot e salvá-lo.
-    for key, value in update_data.items():
-        setattr(ultimo_slot, key, value)
-    
-    ultimo_slot.save()
-    
-    serializer = WhatsappSlotSerializer(ultimo_slot)
-    return Response(serializer.data, status=status.HTTP_200_OK)
-    # --- FIM DA CORREÇÃO ---
-
-@api_view(['POST'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def finalizar_chamado(request, codigo):
-    slots = WhatsappSlot.objects.filter(codigo_chamado=codigo)
-    if not slots.exists():
-        return Response({"detail": f"Nenhum registro encontrado para o chamado #{codigo}."}, status=status.HTTP_404_NOT_FOUND)
-    primeiro_slot = slots.order_by('criado_em').first()
-    if not primeiro_slot:
-        return Response({"detail": "Não foi possível encontrar o início do chamado."}, status=status.HTTP_400_BAD_REQUEST)
-    data_abertura = primeiro_slot.criado_em
-    data_finalizacao = timezone.now()
-    duracao = data_finalizacao - data_abertura
-    tempo_solucao_str = format_timespan(duracao)
-    
-    # Esta atualização em massa está correta para esta ação,
-    # pois todos os registros do chamado devem ser marcados como finalizados.
-    slots.update(
-        chamadofinalizado=True,
-        tempo_solucao=tempo_solucao_str
-    )
-    return Response({"detail": "Chamado finalizado com sucesso."}, status=status.HTTP_200_OK)
-
-@api_view(['DELETE'])
-@authentication_classes([SessionAuthentication])
-@permission_classes([IsAuthenticated])
-def apagar_chamado_por_codigo(request, codigo):
-    if not codigo:
-        return Response({"detail": "Código do chamado não fornecido."}, status=status.HTTP_400_BAD_REQUEST)
-    count, _ = WhatsappSlot.objects.filter(codigo_chamado=codigo).delete()
-    if count > 0:
-        return Response({"detail": f"{count} registros do chamado #{codigo} foram apagados."}, status=status.HTTP_200_OK)
-    else:
-        return Response({"detail": f"Nenhum registro encontrado para o chamado #{codigo}."}, status=status.HTTP_404_NOT_FOUND)
-
-def main_view(request):
-    if request.method == 'POST':
-        username = request.POST.get('username')
-        password = request.POST.get('password')
-        user = authenticate(request, username=username, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect('main')
-        else:
-            return render(request, 'main.html', {'error': 'Usuário ou senha inválidos.'})
-    return render(request, 'main.html')
-
-@login_required(login_url='main')
-def logout_view(request):
-    logout(request)
-    return redirect('main')
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@authentication_classes([])
-def get_next_codigo(request):
-    max_codigo_obj = WhatsappSlot.objects.annotate(
-        codigo_as_int=Cast('codigo_chamado', output_field=IntegerField())
-    ).aggregate(max_codigo=Max('codigo_as_int'))
-    max_num = max_codigo_obj['max_codigo'] or 0
-    novo_codigo = str(max_num + 1)
-    return Response({"codigo": novo_codigo})
-
-@api_view(['DELETE'])
-@permission_classes([AllowAny])
-@authentication_classes([])
-def clean_chamado_by_key(request, key):
-    count, _ = WhatsappSlot.objects.filter(
-        conversation_key=key,
-        chamadofinalizado=False
-    ).delete()
-    return Response({"detail": f"{count} mensagens descartadas"}, status=status.HTTP_200_OK)
-
-@method_decorator(csrf_exempt, name='dispatch')
-class WhatsappSlotCreateOrUpdateAPIView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
-    def get(self, request):
-        qs_filter = Q()
-        conversation_key = request.query_params.get('conversation_key')
-        finalizado = request.query_params.get('finalizado')
-        if conversation_key:
-            qs_filter &= Q(conversation_key=conversation_key)
-        if finalizado is not None:
-            is_finalizado = finalizado.lower() in ['1', 'true', 'sim', 'yes']
-            qs_filter &= Q(chamadofinalizado=is_finalizado)
-            if not is_finalizado and 'conversation_key' in request.query_params:
-                 qs_filter &= Q(codigo_chamado__isnull=True)
-        slots = WhatsappSlot.objects.filter(qs_filter).order_by('criado_em')
-        serializer = WhatsappSlotSerializer(slots, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        data = request.data.copy()
-        if 'contact_name' in data:
-            data['cliente'] = data['contact_name']
-        serializer = WhatsappSlotSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def patch(self, request, pk=None):
-        if not pk:
-            return Response({"detail": "ID do slot é obrigatório"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            slot = WhatsappSlot.objects.get(pk=pk)
-            serializer = WhatsappSlotSerializer(slot, data=request.data, partial=True)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        except WhatsappSlot.DoesNotExist:
-            return Response({"detail": "Slot não encontrado"}, status=status.HTTP_404_NOT_FOUND)
-
-class WhatsappSlotListAPIView(ListAPIView):
-    serializer_class = WhatsappSlotSerializer
-    authentication_classes = [SessionAuthentication]
-    permission_classes = [IsAuthenticated]
-    def get_queryset(self):
-        qs = WhatsappSlot.objects.all().order_by('criado_em')
-        finalizado = self.request.query_params.get('finalizado')
-        if finalizado is not None:
-            is_finalizado = finalizado.lower() in ['1', 'true', 'sim', 'yes']
-            qs = qs.filter(chamadofinalizado=is_finalizado, codigo_chamado__isnull=False)
-        return qs
-
-class WhatsappSlotUpdateAPIView(RetrieveUpdateAPIView):
-    queryset = WhatsappSlot.objects.all()
-    serializer_class = WhatsappSlotSerializer
-    authentication_classes = [SessionAuthentication]
-    permission_classes = [IsAuthenticated]
-
-serializers.py
-
-from rest_framework import serializers
-from .models import WhatsappSlot
-
-class WhatsappSlotSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = WhatsappSlot
-        fields = '__all__'
-
-    def validate_conversation_key(self, value):
-        if not value:
-            raise serializers.ValidationError("conversation_key é obrigatório.")
-        return value
-
-urls.py
-
-from django.urls import path
-from . import views
-from django.views.generic.base import RedirectView
-
-urlpatterns = [
-    # Redireciona a raiz do site para /NocSys/
-    path('', RedirectView.as_view(pattern_name='main', permanent=False)),
-
-    # APIs do Frontend para gerenciamento de chamados e usuário
-    path('api/dashboard/stats/', views.get_dashboard_stats, name='get_dashboard_stats'),
-    path('api/user/stats/', views.get_user_stats, name='get_user_stats'),
-    path('api/users/', views.get_all_users, name='get_all_users'),
-    path('api/chamado/apagar/<str:codigo>/', views.apagar_chamado_por_codigo, name='apagar_chamado_por_codigo'),
-    path('api/chamado/atualizar/<str:codigo>/', views.atualizar_chamado, name='atualizar_chamado'),
-    path('api/chamado/finalizar/<str:codigo>/', views.finalizar_chamado, name='finalizar_chamado'),
-    
-    # URL principal da aplicação
-    path('NocSys/', views.main_view, name='main'),
-    
-    # URL de Logout
-    path('logout/', views.logout_view, name='logout'),
-
-    # APIs para o bot
-    path('api/whatsapp-note/', views.WhatsappSlotCreateOrUpdateAPIView.as_view(), name='api-whatsapp-note'),
-    path('api/whatsapp-note/<int:pk>/', views.WhatsappSlotCreateOrUpdateAPIView.as_view(), name='api-whatsapp-note-detail'),
-    path('api/whatsapp-note/clean-by-key/<path:key>/', views.clean_chamado_by_key, name='api-whatsapp-note-clean-by-key'),
-    path('api/get-next-codigo/', views.get_next_codigo, name='api-get-next-codigo'),
-
-    # APIs para o front
-    path('api/whatsapp-slots/', views.WhatsappSlotListAPIView.as_view(), name='api-whatsapp-slot-list'),
-    path('api/whatsapp-slots/<int:pk>/', views.WhatsappSlotUpdateAPIView.as_view(), name='api-whatsapp-slot-edit'),
-]
-
-chamados_finalizados.js
-
-// chamados_finalizados.js
-function escapeHtml(text) {
-  return text ? text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]) : '';
+@keyframes fadeZoomIn { 
+    0% { opacity: 0; transform: scale(0.9); } 
+    100% { opacity: 1; transform: scale(1); } 
 }
-
-function niceDate(dateStr) {
-  if (!dateStr) return '';
-  const dt = new Date(dateStr);
-  const dtDate = dt.toLocaleDateString('pt-BR');
-  const dtTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  return `${dtTime} ${dtDate}`;
+@keyframes fadeZoomOut { 
+    0% { opacity: 1; transform: scale(1); } 
+    100% { opacity: 0; transform: scale(0.9); } 
 }
-
-async function loadChamadosFinalizados() {
-  const content = document.getElementById('content-area');
-  content.innerHTML = `
-    <h1>Chamados Finalizados</h1>
-    <p>Carregando...</p>
-  `;
-
-  try {
-    const res = await fetch('/api/whatsapp-slots/?finalizado=1');
-    if (!res.ok) throw new Error('Erro ao buscar chamados finalizados');
-    const chamados = await res.json();
-
-    let headerHtml = `
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-        <h1>Chamados Finalizados</h1>
-        <button id="btnRecarregarChamadosFinalizados" title="Recarregar chamados" class="menu-toggle-btn" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--accent-primary);">🔄</button>
-      </div>
-    `;
-
-    if (chamados.length === 0) {
-      content.innerHTML = `${headerHtml}<p>Nenhum chamado finalizado encontrado.</p>`;
-      if (document.getElementById('btnRecarregarChamadosFinalizados')) {
-          document.getElementById('btnRecarregarChamadosFinalizados').onclick = loadChamadosFinalizados;
-      }
-      return;
-    }
-
-    const agrupado = {};
-    chamados.forEach(c => {
-      if (!c.codigo_chamado) return;
-      const cod = c.codigo_chamado;
-      if (!agrupado[cod]) agrupado[cod] = [];
-      agrupado[cod].push(c);
-    });
-
-    const idsOrdenados = Object.keys(agrupado).sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
-
-    let chamadosHtml = '<div style="display:flex;flex-direction:column;gap:12px;">';
-
-    for (const codigo of idsOrdenados) {
-      const slots = agrupado[codigo].sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
-      const primeiro = slots[0];
-      const ultimo = slots[slots.length - 1];
-      const aberto = primeiro.criado_em || '';
-      const encerrado = ultimo.criado_em || '';
-      const resumo = ultimo.resumo || '';
-      const semSuporte = !ultimo.suporte;
-
-      const alertaHtml = semSuporte 
-        ? '<span class="chamado-alerta alert-blue" title="Chamado sem atribuição">❗</span>'
-        : '';
-
-      chamadosHtml += `
-        <div class="chamado" id="chamado-${escapeHtml(codigo)}">
-          <div class="chamado-header" onclick="toggleFinalizadoDetalhes(this.parentNode)">
-            <div class="chamado-info">
-              <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(codigo)}</strong>
-              <span class="chamado-resumo" title="${escapeHtml(resumo)}">${escapeHtml(resumo)}</span>
-              <div class="chamado-info-dates">
-                <span>Aberto: ${niceDate(aberto)}</span>
-                <span>Encerrado: ${niceDate(encerrado)}</span>
-              </div>
-            </div>
-            <div class="chamado-actions">
-                <button class="botao-mostrar">Mostrar</button>
-                <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(codigo)}')">✏️</button>
-                <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(codigo)}')">🗑️</button>
-            </div>
-          </div>
-          <div class="chamado-detalhes" data-codigo="${codigo}"></div>
-        </div>
-      `;
-    }
-    chamadosHtml += `</div>`;
-    content.innerHTML = headerHtml + chamadosHtml;
-    document.getElementById('btnRecarregarChamadosFinalizados').onclick = loadChamadosFinalizados;
-
-  } catch (err) {
-    content.innerHTML = `<p style="color:red;">${err.message}</p>`;
-    console.error(err);
-  }
+@keyframes fadeSlideDown { 
+    0% { opacity: 0; transform: translateY(-20px); } 
+    100% { opacity: 1; transform: translateY(0); } 
 }
-
-async function toggleFinalizadoDetalhes(chamadoElement) {
-  const detalhes = chamadoElement.querySelector('.chamado-detalhes');
-  const btn = chamadoElement.querySelector('.botao-mostrar');
-
-  if (detalhes.style.display === 'block') {
-    detalhes.style.display = 'none';
-    btn.innerText = 'Mostrar';
-    detalhes.innerHTML = '';
-    return;
-  }
-
-  btn.innerText = '...';
-  detalhes.style.display = 'block';
-  detalhes.innerHTML = '<p>Carregando detalhes...</p>';
-  
-  const codigo = detalhes.getAttribute('data-codigo');
-
-  try {
-    const res = await fetch(`/api/whatsapp-slots/?finalizado=1`);
-    if (!res.ok) throw new Error('Erro ao buscar detalhes do chamado finalizado');
-    let msgs = (await res.json()).filter(s => `${s.codigo_chamado}` === codigo);
-    msgs.sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
-
-    let convo = `<div class="conversa-container">`;
-    msgs.forEach(m => {
-      const data = new Date(m.criado_em);
-      const dataStr = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      const isSuporte = m.username === '5514997642104@c.us';
-      const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
-      convo += `
-        <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
-            <div class="mensagem-header">
-              <span>${escapeHtml(nomeExibido)}</span>
-              <span>${dataStr}</span>
-            </div>
-            <div>${escapeHtml(m.text)}</div>
-        </div>
-      `;
-    });
-    convo += `</div>`;
-
-    const ultimo = msgs[msgs.length - 1] || {};
-    convo += `
-      <div class="detalhes-suporte-container">
-        <h3>Detalhes do Suporte</h3>
-        <div class="detalhes-grid">
-          <span>Suporte:</span> <input readonly value="${escapeHtml(ultimo.suporte || 'N/A')}" />
-          <span>Cliente:</span> <input readonly value="${escapeHtml(ultimo.cliente || 'N/A')}" />
-          <span>Setor:</span> <input readonly value="${escapeHtml(ultimo.setor || 'N/A')}" />
-          <span>Resumo:</span> <input readonly value="${escapeHtml(ultimo.resumo || 'N/A')}" />
-          <span>Problema:</span> <textarea readonly rows="2">${escapeHtml(ultimo.problema || 'N/A')}</textarea>
-          <span>Solução:</span> <textarea readonly rows="2">${escapeHtml(ultimo.solucao || 'N/A')}</textarea>
-          <span>Indicador:</span> <input readonly value="${escapeHtml(ultimo.indicador || 'N/A')}" />
-          <span>Tempo Solução:</span> <input readonly value="${escapeHtml(ultimo.tempo_solucao || 'N/A')}" />
-        </div>
-      </div>
-    `;
-
-    detalhes.innerHTML = convo;
-    btn.innerText = 'Esconder';
-
-  } catch (err) {
-    detalhes.innerHTML = `<p style="color:red;">${err.message}</p>`;
-    btn.innerText = 'Tentar Novamente';
-    console.error(err);
-  }
-}
-
-abertos.js
-
-// abertos.js
-function escapeHtml(text) {
-  return text ? text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]) : '';
-}
-
-function niceDate(dateStr) {
-  if (!dateStr) return '';
-  const dt = new Date(dateStr);
-  const dtDate = dt.toLocaleDateString('pt-BR');
-  const dtTime = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  return `${dtTime} ${dtDate}`;
-}
-
-async function loadAbertos() {
-  const content = document.getElementById('content-area');
-  content.innerHTML = `
-    <h1>Chamados em Aberto</h1>
-    <p>Carregando...</p>
-  `;
-
-  try {
-    const res = await fetch('/api/whatsapp-slots/?finalizado=0');
-    if (!res.ok) throw new Error('Erro ao buscar chamados em aberto');
-    const chamados = await res.json();
-
-    let headerHtml = `
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-        <h1>Chamados em Aberto</h1>
-        <button id="btnRecarregarChamadosAbertos" title="Recarregar chamados" class="menu-toggle-btn" style="background: none; border: none; font-size: 24px; cursor: pointer; color: var(--accent-primary);">🔄</button>
-      </div>
-    `;
-
-    if (chamados.length === 0) {
-      content.innerHTML = `${headerHtml}<p>Nenhum chamado em aberto.</p>`;
-      if(document.getElementById('btnRecarregarChamadosAbertos')) {
-        document.getElementById('btnRecarregarChamadosAbertos').onclick = loadAbertos;
-      }
-      return;
-    }
-
-    const agrupado = {};
-    chamados.forEach(c => {
-      if (!c.codigo_chamado) return;
-      const cod = c.codigo_chamado;
-      if (!agrupado[cod]) agrupado[cod] = [];
-      agrupado[cod].push(c);
-    });
-
-    const idsOrdenados = Object.keys(agrupado).sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
-
-    let chamadosHtml = '<div style="display:flex;flex-direction:column;gap:12px;">';
-
-    for (const codigo of idsOrdenados) {
-      const slots = agrupado[codigo].sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
-      const primeiro = slots[0];
-      const ultimo = slots[slots.length - 1];
-      const aberto = primeiro.criado_em || '';
-      const resumo = ultimo.resumo || '';
-      const semSuporte = !ultimo.suporte;
-
-      const alertaHtml = semSuporte 
-        ? '<span class="chamado-alerta alert-gray" title="Chamado sem atribuição">❗</span>' 
-        : '';
-
-      chamadosHtml += `
-        <div class="chamado" id="chamado-${escapeHtml(codigo)}">
-          <div class="chamado-header" onclick="toggleAbertoDetalhes(this.parentNode)">
-            <div class="chamado-info">
-              <strong class="chamado-codigo">${alertaHtml}#${escapeHtml(codigo)}</strong>
-              <span class="chamado-resumo" title="${escapeHtml(resumo)}">${escapeHtml(resumo)}</span>
-              <div class="chamado-info-dates">
-                <span>Aberto: ${niceDate(aberto)}</span>
-              </div>
-            </div>
-            <div class="chamado-actions">
-                <button class="botao-mostrar">Mostrar</button>
-                <button class="botao-finalizar" title="Finalizar Chamado" onclick="event.stopPropagation(); finalizarChamado('${escapeHtml(codigo)}')">✔️</button>
-                <button class="botao-editar" title="Editar Chamado" onclick="event.stopPropagation(); showEditModal('${escapeHtml(codigo)}')">✏️</button>
-                <button class="botao-apagar" title="Apagar Chamado" onclick="event.stopPropagation(); apagarChamado('${escapeHtml(codigo)}')">🗑️</button>
-            </div>
-          </div>
-          <div class="chamado-detalhes" data-codigo="${codigo}"></div>
-        </div>
-      `;
-    }
-    chamadosHtml += `</div>`;
-    content.innerHTML = headerHtml + chamadosHtml;
-    document.getElementById('btnRecarregarChamadosAbertos').onclick = loadAbertos;
-
-  } catch (err) {
-    content.innerHTML = `<p style="color:red;">${err.message}</p>`;
-    console.error(err);
-  }
-}
-
-async function toggleAbertoDetalhes(chamadoElement) {
-  const detalhes = chamadoElement.querySelector('.chamado-detalhes');
-  const btn = chamadoElement.querySelector('.botao-mostrar');
-
-  if (detalhes.style.display === 'block') {
-    detalhes.style.display = 'none';
-    btn.innerText = 'Mostrar';
-    detalhes.innerHTML = '';
-    return;
-  }
-
-  btn.innerText = '...';
-  detalhes.style.display = 'block'; 
-  detalhes.innerHTML = '<p>Carregando detalhes...</p>';
-  
-  const codigo = detalhes.getAttribute('data-codigo');
-
-  try {
-    const res = await fetch(`/api/whatsapp-slots/?finalizado=0`);
-    if (!res.ok) throw new Error('Erro ao buscar detalhes do chamado em aberto');
-    let msgs = (await res.json()).filter(s => `${s.codigo_chamado}` === codigo);
-    msgs.sort((a,b) => new Date(a.criado_em) - new Date(b.criado_em));
-
-    let convo = `<div class="conversa-container">`;
-    msgs.forEach(m => {
-      const data = new Date(m.criado_em);
-      const dataStr = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      const isSuporte = m.username === '5514997642104@c.us';
-      const nomeExibido = isSuporte ? 'Suporte' : (m.cliente || m.contact_name || 'Cliente');
-      convo += `
-        <div class="mensagem ${isSuporte ? 'suporte' : 'cliente'}">
-            <div class="mensagem-header">
-              <span>${escapeHtml(nomeExibido)}</span>
-              <span>${dataStr}</span>
-            </div>
-            <div>${escapeHtml(m.text)}</div>
-        </div>
-      `;
-    });
-    convo += `</div>`;
-
-    detalhes.innerHTML = convo;
-    btn.innerText = 'Esconder';
-
-  } catch (err) {
-    detalhes.innerHTML = `<p style="color:red;">${err.message}</p>`;
-    btn.innerText = 'Tentar Novamente';
-    console.error(err);
-  }
-}
-
-dashboard.js
-
-async function loadDashboard() {
-    const contentArea = document.getElementById('content-area');
-    contentArea.innerHTML = `
-        <h1>Dashboard</h1>
-        <p>Carregando estatísticas...</p>
-    `;
-
-    try {
-        const response = await fetch('/api/dashboard/stats/');
-        if (!response.ok) {
-            throw new Error(`Erro ao buscar dados do dashboard: ${response.statusText}`);
-        }
-        const stats = await response.json();
-
-        contentArea.innerHTML = `
-            <h1>Dashboard</h1>
-            <div class="dashboard-grid">
-                <div class="dashboard-card card-yellow" onclick="loadAbertos()">
-                    <div class="card-number">${stats.total_abertos}</div>
-                    <div class="card-title">Chamados em Aberto</div>
-                </div>
-                <div class="dashboard-card card-green" onclick="loadChamadosFinalizados()">
-                    <div class="card-number">${stats.total_finalizados}</div>
-                    <div class="card-title">Chamados Finalizados</div>
-                </div>
-                <div class="dashboard-card card-gray" onclick="loadAbertos()">
-                    <div class="card-number">${stats.abertos_sem_atribuicao}</div>
-                    <div class="card-title">Abertos (Sem Atribuição)</div>
-                </div>
-                <div class="dashboard-card card-blue" onclick="loadChamadosFinalizados()">
-                    <div class="card-number">${stats.finalizados_sem_atribuicao}</div>
-                    <div class="card-title">Finalizados (Sem Atribuição)</div>
-                </div>
-                <div class="dashboard-card card-red">
-                    <div class="card-number">${stats.atrasados}</div>
-                    <div class="card-title">Chamados Atrasados</div>
-                    <div class="card-wip">(WIP)</div>
-                </div>
-            </div>
-        `;
-
-    } catch (error) {
-        console.error("Erro ao carregar o dashboard:", error);
-        contentArea.innerHTML = `
-            <h1>Dashboard</h1>
-            <p style="color: var(--danger-color);">Não foi possível carregar as estatísticas. Tente novamente mais tarde.</p>
-        `;
-    }
-}
-
-config.js
-
-// config.js
-
-async function showSettingsModal() {
-    const backdrop = document.getElementById('settings-backdrop');
-    if (!backdrop) return;
-    
-    const closeBtn = document.getElementById('settings-close-btn');
-    const navLinks = document.querySelectorAll('.settings-nav-link');
-    const contentContainer = backdrop.querySelector('.settings-container');
-
-    // Mostra o modal e o backdrop
-    backdrop.classList.remove('hidden');
-    contentContainer.classList.remove('fade-in'); // Garante que a animação possa rodar de novo
-    void contentContainer.offsetWidth; // Força o reflow para reiniciar a animação
-    contentContainer.classList.add('fade-in');
-
-
-    // Função para esconder o modal
-    const hide = () => {
-        backdrop.classList.add('hidden');
-        // Limpa os event listeners para evitar duplicação
-        closeBtn.removeEventListener('click', hide);
-        backdrop.removeEventListener('click', backdropClickHandler);
-    };
-    
-    const backdropClickHandler = (e) => {
-        if (e.target === backdrop) {
-            hide();
-        }
-    };
-    
-    closeBtn.addEventListener('click', hide, { once: true });
-    backdrop.addEventListener('click', backdropClickHandler, { once: true });
-
-    // Lógica de navegação interna do modal
-    navLinks.forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-
-            // Remove a classe 'active' de todos os links
-            navLinks.forEach(l => l.classList.remove('active'));
-            // Esconde todas as views
-            document.querySelectorAll('.settings-view').forEach(v => v.classList.add('hidden'));
-
-            // Adiciona a classe 'active' ao link clicado e mostra a view correspondente
-            link.classList.add('active');
-            const targetId = link.getAttribute('data-target');
-            const targetView = document.getElementById(targetId);
-            if(targetView) {
-                targetView.classList.remove('hidden');
-            }
-        });
-    });
-
-    // Busca e preenche os dados do usuário na aba "Usuário"
-    const userViewLink = document.querySelector('.settings-nav-link[data-target="settings-view-user"]');
-    if (userViewLink && userViewLink.classList.contains('active')) {
-        try {
-            const response = await fetch('/api/user/stats/');
-            if (!response.ok) {
-                throw new Error('Não foi possível carregar os dados do usuário.');
-            }
-            const data = await response.json();
-
-            // Formata data
-            const dateJoined = new Date(data.date_joined);
-            const formattedDate = dateJoined.toLocaleDateString('pt-BR', {
-                day: '2-digit',
-                month: 'long',
-                year: 'numeric'
-            });
-
-            // Preenche os campos
-            document.getElementById('settings-user-name').textContent = data.full_name || data.username;
-            document.getElementById('settings-user-email').textContent = data.email || 'Não informado';
-            document.getElementById('settings-user-username').textContent = data.username;
-            document.getElementById('settings-user-joined').textContent = formattedDate;
-            document.getElementById('settings-finalizados-count').textContent = data.finalizados_count;
-
-        } catch (error) {
-            console.error('Erro ao buscar estatísticas do usuário:', error);
-            document.getElementById('settings-user-name').textContent = 'Erro ao carregar';
-            document.getElementById('settings-user-email').textContent = 'Erro ao carregar';
-        }
-    }
-}
-
-bot.js
-
-const wppconnect = require('@wppconnect-team/wppconnect');
-const axios = require('axios');
-
-const OPERADOR = '5514997642104@c.us';
-const conversationState = {};
-
-function getBaseKey(u1, u2) {
-    return [u1, u2].sort().join('|');
-}
-
-wppconnect.create({
-    browserArgs: ['--no-sandbox'],
-    executablePath: '/usr/bin/google-chrome',
-    headless: false,
-    autoClose: false,
-})
-.then(client => start(client))
-.catch(console.error);
-
-async function start(client) {
-    console.log('✅ Bot iniciado. Aguardando mensagens...');
-
-    client.onAnyMessage(async (msg) => {
-        try {
-            if (!msg?.body) return;
-            const { from, to, body } = msg;
-            const texto = body.trim();
-
-            let contato;
-            if (from === OPERADOR && to?.endsWith('@c.us')) contato = to;
-            else if (to === OPERADOR && from?.endsWith('@c.us')) contato = from;
-            else return;
-
-            // Inicia a gravação
-            if (from === OPERADOR && /^\/s$/i.test(texto)) {
-                // 1. VERIFICA SE JÁ EXISTE UMA GRAVAÇÃO ATIVA PARA ESTE CONTATO
-                if (conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Já existe uma gravação ativa para este contato. Finalize-a com /p ou /a antes de iniciar uma nova.');
-                    return;
-                }
-                
-                const key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
-                conversationState[contato] = { key, slots: [] };
-                await client.sendText(from, '🟢 Gravação ativada.');
-                // 2. MENSAGEM PARA O CLIENTE FOI REMOVIDA. SÓ O OPERADOR RECEBE A CONFIRMAÇÃO.
-                return;
-            }
-
-            // Deixa o chamado em aberto
-            if (from === OPERADOR && /^\/a$/i.test(texto)) {
-                if (!conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Nenhuma gravação ativa.');
-                    return;
-                }
-                await finalizarChamado(client, contato, false);
-                delete conversationState[contato];
-                return;
-            }
-
-            // Finaliza o chamado
-            if (from === OPERADOR && /^\/p$/i.test(texto)) {
-                if (!conversationState[contato]) {
-                    await client.sendText(from, '⚠️ Nenhuma gravação ativa.');
-                    return;
-                }
-                await finalizarChamado(client, contato, true);
-                delete conversationState[contato];
-                return;
-            }
-
-            // Descarta a gravação
-            if (from === OPERADOR && /^\/d$/i.test(texto)) {
-                if (conversationState[contato]) {
-                    const key = conversationState[contato].key;
-                    await axios.delete(`http://localhost:8000/api/whatsapp-note/clean-by-key/${encodeURIComponent(key)}/`);
-                    
-                    delete conversationState[contato];
-                    await client.sendText(OPERADOR, '🗑️ Gravação cancelada. As mensagens foram descartadas.');
-                } else {
-                    await client.sendText(OPERADOR, '⚠️ Nenhuma gravação ativa para cancelar.');
-                }
-                return;
-            }
-
-            // Registra a mensagem se houver uma gravação ativa
-            if (conversationState[contato]) {
-                const contactInfo = await client.getContact(contato);
-                const contactDisplayName = contactInfo.name || contactInfo.pushname || contato;
-                
-                const key = conversationState[contato].key;
-                const { data } = await axios.post('http://localhost:8000/api/whatsapp-note/', {
-                    conversation_key: key,
-                    text: texto,
-                    username: from,
-                    contact_name: contactDisplayName,
-                });
-                conversationState[contato].slots.push(data.id);
-            }
-        } catch (err) {
-            console.error('❌ Erro: ', err.message);
-            const errorMessage = err.response ? JSON.stringify(err.response.data) : err.message;
-            client.sendText(OPERADOR, `❌ Erro no Bot: ${errorMessage}`);
-        }
-    });
-}
-
-async function finalizarChamado(client, contato, finalizado) {
-    const key = conversationState[contato].key;
-    const { data: slots } = await axios.get('http://localhost:8000/api/whatsapp-note/', {
-        params: { conversation_key: key },
-    });
-
-    if (slots.length === 0) {
-        await client.sendText(OPERADOR, '⚠️ Nenhuma mensagem para registrar. Finalizando sem salvar.');
-        return;
-    }
-
-    const { data } = await axios.get('http://localhost:8000/api/get-next-codigo/');
-    const codigo = data.codigo;
-
-    for (const s of slots) {
-        await axios.patch(`http://localhost:8000/api/whatsapp-note/${s.id}/`, {
-            chamadofinalizado: finalizado,
-            codigo_chamado: codigo
-        });
-    }
-
-    const msg = finalizado ? `🔴 Chamado finalizado. Código: #${codigo}` : `🟡 Chamado em aberto. Código: #${codigo}`;
-    await client.sendText(OPERADOR, msg);
-}
-

@@ -10,15 +10,19 @@ from rest_framework import status, viewsets
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.authentication import SessionAuthentication
-from django.db.models import Max, Q, IntegerField, Min
+from django.db.models import Max, Q, IntegerField, Min, Count
 from django.db.models.functions import Cast
-from .models import WhatsappSlot, Cliente
-from .serializers import WhatsappSlotSerializer, ClienteSerializer
+from .models import WhatsappSlot, Cliente, Observacao, Profile
+from .serializers import WhatsappSlotSerializer, ClienteSerializer, ObservacaoSerializer
 from django.contrib.auth.models import User
 from django.utils import timezone
 import base64
 import uuid
 from django.core.files.base import ContentFile
+from rest_framework.parsers import MultiPartParser, FormParser
+import mimetypes
+from django.conf import settings
+from django.urls import reverse
 
 class ClienteViewSet(viewsets.ModelViewSet):
     queryset = Cliente.objects.all().order_by('nome')
@@ -36,22 +40,66 @@ def get_cliente_numeros(request):
 @authentication_classes([SessionAuthentication])
 @permission_classes([IsAuthenticated])
 def get_grafico_status_chamados(request):
-    codigos_finalizados = WhatsappSlot.objects.filter(chamadofinalizado=True).values_list('codigo_chamado', flat=True).distinct()
-    codigos_abertos_atribuidos = WhatsappSlot.objects.filter(chamadofinalizado=False, suporte__isnull=False, suporte__gt='').values_list('codigo_chamado', flat=True).distinct()
-    
-    codigos_atribuidos_set = set(codigos_atribuidos)
-    
-    codigos_abertos_total = WhatsappSlot.objects.filter(
-        chamadofinalizado=False, codigo_chamado__isnull=False
-    ).values_list('codigo_chamado', flat=True).distinct()
+    try:
+        is_admin = request.user.profile.adm
+    except Profile.DoesNotExist:
+        is_admin = False
 
-    codigos_nao_atribuidos_count = len(set(codigos_abertos_total) - codigos_atribuidos_set)
+    # Se for admin, retorna dados detalhados por usuário
+    if is_admin:
+        users = User.objects.filter(is_active=True).order_by('username')
+        user_stats = []
+        now = timezone.now()
+        
+        for user in users:
+            finalizados = WhatsappSlot.objects.filter(suporte=user.username, chamadofinalizado=True).values('codigo_chamado').distinct().count()
+            atribuidos = WhatsappSlot.objects.filter(suporte=user.username, chamadofinalizado=False).values('codigo_chamado').distinct().count()
+            
+            atrasados = WhatsappSlot.objects.filter(
+                suporte=user.username, chamadofinalizado=False
+            ).values('codigo_chamado').annotate(
+                data_abertura=Min('criado_em')
+            ).filter(
+                data_abertura__lt=now - timezone.timedelta(days=20)
+            ).count()
 
-    data = {
-        'labels': ['Resolvidos', 'Em Aberto (Atribuídos)', 'Em Aberto (Não Atribuídos)'],
-        'counts': [len(codigos_finalizados), len(codigos_atribuidos_set), codigos_nao_atribuidos_count]
-    }
-    return Response(data)
+            user_stats.append({
+                'username': user.username,
+                'finalizados': finalizados,
+                'atribuidos': atribuidos,
+                'atrasados': atrasados
+            })
+        
+        # Filtra usuários que não têm estatísticas para não poluir o gráfico
+        user_stats = [stat for stat in user_stats if stat['finalizados'] > 0 or stat['atribuidos'] > 0 or stat['atrasados'] > 0]
+
+        data = {
+            'type': 'admin',
+            'data': user_stats
+        }
+        return Response(data)
+
+    # Se não for admin, retorna os dados gerais (lógica original corrigida)
+    else:
+        codigos_finalizados = WhatsappSlot.objects.filter(chamadofinalizado=True, codigo_chamado__isnull=False).values_list('codigo_chamado', flat=True).distinct()
+        codigos_abertos_atribuidos = WhatsappSlot.objects.filter(chamadofinalizado=False, suporte__isnull=False, suporte__gt='', codigo_chamado__isnull=False).values_list('codigo_chamado', flat=True).distinct()
+        
+        codigos_atribuidos_set = set(codigos_abertos_atribuidos)
+        
+        codigos_abertos_total = WhatsappSlot.objects.filter(
+            chamadofinalizado=False, codigo_chamado__isnull=False
+        ).values_list('codigo_chamado', flat=True).distinct()
+
+        codigos_nao_atribuidos_count = len(set(codigos_abertos_total) - codigos_atribuidos_set)
+
+        data = {
+            'type': 'user',
+            'data': {
+                'labels': ['Resolvidos', 'Em Aberto (Atribuídos)', 'Em Aberto (Não Atribuídos)'],
+                'counts': [len(codigos_finalizados), len(codigos_atribuidos_set), codigos_nao_atribuidos_count]
+            }
+        }
+        return Response(data)
 
 def format_timespan(td):
     days, remainder = divmod(td.total_seconds(), 86400)
@@ -116,12 +164,23 @@ def get_all_users(request):
 
 @api_view(['GET'])
 @authentication_classes([SessionAuthentication])
+@permission_classes([IsAuthenticated])
 def get_user_stats(request):
     user = request.user
     finalizados_count = WhatsappSlot.objects.filter(chamadofinalizado=True, codigo_chamado__isnull=False, suporte=user.username).values('codigo_chamado').distinct().count()
+    
+    try:
+        is_admin = user.profile.adm
+    except Profile.DoesNotExist:
+        is_admin = False
+
     return Response({
-        "username": user.username, "email": user.email, "full_name": user.get_full_name(),
-        "date_joined": user.date_joined, "finalizados_count": finalizados_count,
+        "username": user.username, 
+        "email": user.email, 
+        "full_name": user.get_full_name(),
+        "date_joined": user.date_joined, 
+        "finalizados_count": finalizados_count,
+        "is_admin": is_admin
     })
 
 @api_view(['PATCH'])
@@ -189,6 +248,46 @@ def get_next_codigo(request):
 def clean_chamado_by_key(request, key):
     WhatsappSlot.objects.filter(conversation_key=key, chamadofinalizado=False).delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+class ObservacaoAPIView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, codigo, *args, **kwargs):
+        observacoes = Observacao.objects.filter(codigo_chamado=codigo)
+        serializer = ObservacaoSerializer(observacoes, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, codigo, *args, **kwargs):
+        if not WhatsappSlot.objects.filter(codigo_chamado=codigo).exists():
+            return Response({"detail": "Chamado não encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        data = request.data.copy()
+        data['codigo_chamado'] = codigo
+
+        if 'media_file' in data and data['media_file']:
+            mime_type, _ = mimetypes.guess_type(data['media_file'].name)
+            if mime_type:
+                if mime_type.startswith('image'):
+                    data['msg_type'] = 'image'
+                elif mime_type.startswith('audio'):
+                    data['msg_type'] = 'audio'
+                elif mime_type.startswith('video'):
+                    data['msg_type'] = 'video'
+                else:
+                    data['msg_type'] = 'document'
+            else:
+                data['msg_type'] = 'document'
+        else:
+            data['msg_type'] = 'text'
+
+        serializer = ObservacaoSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save(autor=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 @method_decorator(csrf_exempt, name='dispatch')
 class WhatsappSlotCreateOrUpdateAPIView(APIView):
@@ -293,9 +392,6 @@ class WhatsappSlotListAPIView(ListAPIView):
                 elif dias_em_aberto > 10: atraso_status = "Atenção!"
                 else: atraso_status = "Ok!"
             
-            # --- CORREÇÃO AQUI ---
-            # Itera sobre TODOS os slots do chamado e adiciona-os à lista de resposta,
-            # garantindo que o histórico completo seja enviado ao frontend.
             for slot in slots:
                 slot_data = self.get_serializer(slot).data
                 slot_data.update(dados_consolidados)
@@ -309,3 +405,25 @@ class WhatsappSlotUpdateAPIView(RetrieveUpdateAPIView):
     serializer_class = WhatsappSlotSerializer
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated]
+
+def admin_login_gate_view(request):
+    admin_index_url = reverse('admin:index')
+
+    if request.session.get('admin_gate_passed'):
+        return redirect(admin_index_url)
+
+    error_message = None
+    if request.method == 'POST':
+        entered_password = request.POST.get('password')
+        correct_password = getattr(settings, 'ADMIN_ACCESS_PASSWORD', None)
+
+        if entered_password and entered_password == correct_password:
+            request.session['admin_gate_passed'] = True
+            return redirect(request.GET.get('next', admin_index_url))
+        else:
+            error_message = "Senha de acesso incorreta. Tente novamente."
+    
+    return render(request, 'admin_gate.html', {
+        'error_message': error_message,
+        'app_title': 'NocSys - Acesso Restrito'
+    })

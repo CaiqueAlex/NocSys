@@ -1,4 +1,13 @@
-let statusChartInstance = null;
+let chartInstances = []; // Alterado para um array para gerenciar múltiplos gráficos
+
+// --- LÓGICA DE GRÁFICOS REFEITA ---
+
+// Define cores padrão para os gráficos baseadas no tema atual
+function setChartDefaults() {
+    const style = getComputedStyle(document.body);
+    Chart.defaults.color = style.getPropertyValue('--text-primary').trim();
+    Chart.defaults.borderColor = style.getPropertyValue('--border-color').trim();
+}
 
 async function showSettingsModal() {
     const backdrop = document.getElementById('settings-backdrop');
@@ -25,10 +34,8 @@ async function showSettingsModal() {
             const targetView = document.getElementById(targetId);
             
             if (targetId === 'settings-view-graficos') {
-                settingsBox.classList.add('chart-view-active');
                 loadCharts();
             } else {
-                settingsBox.classList.remove('chart-view-active');
                 if (targetId === 'settings-view-user') loadUserStats();
                 else if (targetId === 'settings-view-clientes') loadClientManagement();
             }
@@ -36,7 +43,6 @@ async function showSettingsModal() {
         };
     });
 
-    // Carga inicial da primeira aba
     document.querySelector('.settings-nav-link.active').click();
 }
 
@@ -50,6 +56,11 @@ async function loadUserStats() {
         document.getElementById('settings-user-username').textContent = data.username;
         document.getElementById('settings-user-joined').textContent = new Date(data.date_joined).toLocaleDateString('pt-BR');
         document.getElementById('settings-finalizados-count').textContent = data.finalizados_count;
+        if (currentUser) {
+            currentUser.is_admin = data.is_admin;
+        } else {
+            currentUser = { is_admin: data.is_admin };
+        }
     } catch (error) {
         console.error('Erro:', error);
     }
@@ -88,53 +99,180 @@ async function loadClientManagement() {
 }
 
 async function loadCharts() {
-    const legendContainer = document.getElementById('status-chart-legend');
-    legendContainer.innerHTML = 'Carregando...';
+    const chartsContainer = document.getElementById('charts-container');
+    chartsContainer.innerHTML = '<p>Carregando estatísticas...</p>';
     try {
         const res = await fetch('/api/graficos/status_chamados/');
-        if (!res.ok) throw new Error('Falha ao carregar dados.');
+        if (!res.ok) throw new Error('Falha ao carregar dados dos gráficos.');
         const chartData = await res.json();
-        renderStatusChart(chartData);
+        
+        if (chartData.type === 'admin') {
+            renderAdminDataTable(chartData.data);
+        } else {
+            renderUserDataSummary(chartData.data);
+        }
     } catch (error) {
-        legendContainer.innerHTML = `<p style="color:red;">${error.message}</p>`;
+        chartsContainer.innerHTML = `<p style="color:var(--danger-color);">${error.message}</p>`;
     }
 }
 
-function renderStatusChart(data) {
-    const canvas = document.getElementById('status-pie-chart');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (statusChartInstance) statusChartInstance.destroy();
+function showChartsFullscreen(data, type) {
+    const backdrop = document.getElementById('charts-fullscreen-backdrop');
+    const content = document.getElementById('charts-fullscreen-content');
+    const closeBtn = document.getElementById('charts-fullscreen-close-btn');
 
-    statusChartInstance = new Chart(ctx, {
+    content.innerHTML = ''; // Limpa conteúdo anterior
+    chartInstances.forEach(chart => chart.destroy());
+    chartInstances = [];
+
+    if (type === 'admin') {
+        renderAdminChartsInModal(data, content);
+    } else {
+        renderStatusChartInModal(data, content);
+    }
+
+    const hide = () => backdrop.classList.add('hidden');
+    closeBtn.onclick = hide;
+    backdrop.onclick = e => { if (e.target === backdrop) hide(); };
+    
+    backdrop.classList.remove('hidden');
+}
+
+function renderAdminDataTable(data) {
+    const container = document.getElementById('charts-container');
+    if (data.length === 0) {
+        container.innerHTML = '<p>Nenhuma estatística de usuário para exibir.</p>';
+        return;
+    }
+
+    let tableHTML = `
+        <div class="stats-header">
+            <h3>Resumo por Usuário</h3>
+            <button id="show-admin-charts-btn" class="btn-show-charts">Ver Gráficos ⛶</button>
+        </div>
+        <div class="client-table-container">
+            <table class="admin-stats-table">
+                <thead>
+                    <tr>
+                        <th>Usuário</th>
+                        <th>Finalizados</th>
+                        <th>Atribuídos</th>
+                        <th>Atrasados</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    data.forEach(user => {
+        tableHTML += `
+            <tr>
+                <td>${escapeHtml(user.username)}</td>
+                <td>${user.finalizados}</td>
+                <td>${user.atribuidos}</td>
+                <td>${user.atrasados}</td>
+            </tr>
+        `;
+    });
+    tableHTML += '</tbody></table></div>';
+    container.innerHTML = tableHTML;
+    document.getElementById('show-admin-charts-btn').onclick = () => showChartsFullscreen(data, 'admin');
+}
+
+function renderUserDataSummary(data) {
+    const container = document.getElementById('charts-container');
+    let summaryHTML = `
+        <div class="stats-header">
+            <h3>Resumo Geral</h3>
+            <button id="show-user-chart-btn" class="btn-show-charts">Ver Gráfico ⛶</button>
+        </div>
+        <div class="user-stats-summary">
+    `;
+    data.labels.forEach((label, index) => {
+        summaryHTML += `
+            <div class="summary-item">
+                <span class="summary-label">${label}:</span>
+                <span class="summary-value">${data.counts[index]}</span>
+            </div>
+        `;
+    });
+    summaryHTML += `</div>`;
+    container.innerHTML = summaryHTML;
+    document.getElementById('show-user-chart-btn').onclick = () => showChartsFullscreen(data, 'user');
+}
+
+function renderAdminChartsInModal(data, container) {
+    setChartDefaults();
+    const labels = data.map(d => d.username);
+    const chartConfigs = [
+        { title: 'Chamados Finalizados', data: data.map(d => d.finalizados), color: getComputedStyle(document.body).getPropertyValue('--success-color').trim() },
+        { title: 'Chamados Atribuídos (Abertos)', data: data.map(d => d.atribuidos), color: getComputedStyle(document.body).getPropertyValue('--accent-tertiary').trim() },
+        { title: 'Chamados Atrasados', data: data.map(d => d.atrasados), color: getComputedStyle(document.body).getPropertyValue('--danger-color').trim() }
+    ];
+
+    chartConfigs.forEach((config, index) => {
+        const chartWrapper = document.createElement('div');
+        chartWrapper.className = 'chart-box-admin';
+        chartWrapper.innerHTML = `<h3>${config.title}</h3><canvas id="modal-admin-chart-${index}"></canvas>`;
+        container.appendChild(chartWrapper);
+        const ctx = document.getElementById(`modal-admin-chart-${index}`).getContext('2d');
+        const newChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: config.title, data: config.data,
+                    backgroundColor: config.color, borderColor: config.color, borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1, color: Chart.defaults.color } }, x: { ticks: { color: Chart.defaults.color } } }
+            }
+        });
+        chartInstances.push(newChart);
+    });
+}
+
+function renderStatusChartInModal(data, container) {
+    setChartDefaults();
+    container.innerHTML = `
+        <div id="status-chart-container-modal" class="chart-box">
+            <canvas id="modal-pie-chart"></canvas>
+        </div>
+        <div id="status-chart-legend-modal" class="chart-legend"></div>
+    `;
+    const ctx = document.getElementById('modal-pie-chart').getContext('2d');
+    const style = getComputedStyle(document.body);
+    const newChart = new Chart(ctx, {
         type: 'pie',
         data: {
             labels: data.labels,
             datasets: [{
                 data: data.counts,
-                backgroundColor: ['#22c55e', '#facc15', '#ef4444'],
-                borderColor: 'var(--bg-tertiary)',
-                borderWidth: 2
+                backgroundColor: [
+                    style.getPropertyValue('--success-color').trim(), 
+                    style.getPropertyValue('--accent-tertiary').trim(), 
+                    style.getPropertyValue('--danger-color').trim()
+                ],
+                borderColor: style.getPropertyValue('--bg-tertiary').trim(), borderWidth: 2
             }]
         },
-        options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { display: false } }
-        }
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
     });
+    chartInstances.push(newChart);
 
-    const legendContainer = document.getElementById('status-chart-legend');
+    const legendContainer = document.getElementById('status-chart-legend-modal');
     legendContainer.innerHTML = '';
     data.labels.forEach((label, index) => {
         legendContainer.innerHTML += `
             <div class="legend-item">
-                <span class="legend-color-box" style="background-color: ${statusChartInstance.data.datasets[0].backgroundColor[index]};"></span>
+                <span class="legend-color-box" style="background-color: ${newChart.data.datasets[0].backgroundColor[index]};"></span>
                 <span class="legend-label">${label}: <strong>${data.counts[index]}</strong></span>
             </div>`;
     });
 }
 
-// --- Funções CRUD para Clientes ---
+// --- Funções CRUD para Clientes (sem alterações) ---
 function showClientModal(client = null) {
     const modal = document.getElementById('cliente-modal-backdrop');
     const form = document.getElementById('cliente-form');
@@ -212,7 +350,7 @@ async function handleSaveClient(event) {
         }
         
         document.getElementById('cliente-modal-backdrop').classList.add('hidden');
-        loadClientManagement(); // Recarrega a lista
+        loadClientManagement(); 
         
     } catch (err) {
         alert(`Erro ao salvar cliente: ${err.message}`);

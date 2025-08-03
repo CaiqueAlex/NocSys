@@ -3,7 +3,9 @@ const axios = require('axios');
 
 const OPERADOR = '5514997642104@c.us';
 const API_BASE_URL = 'http://localhost:80';
-const INACTIVITY_TIMEOUT = 900 * 1000;
+const INACTIVITY_TIMEOUT = 900 * 1000; // 15 minutos para finalização automática do chamado
+// --- CONSTANTE DE PAUSA AJUSTADA PARA 10 MINUTOS ---
+const PAUSE_DURATION = 10 * 60 * 1000; // 10 minutos
 
 const conversationState = {};
 let specialNumbers = [];
@@ -92,8 +94,12 @@ async function start(client) {
             }
             const currentState = conversationState[contato];
             console.log(`ℹ️ Estado atual da conversa com ${contato}: ${currentState.stage}`);
-
-
+            
+            if (currentState.stage === 'paused') {
+                console.log(`⏸️ Bot pausado para ${contato}. Ignorando mensagem.`);
+                return;
+            }
+            
             if (currentState.stage === 'recording') {
                 console.log(`🔄 Reiniciando timer de inatividade para ${contato}.`);
                 resetInactivityTimer(client, contato);
@@ -145,7 +151,6 @@ async function start(client) {
                     };
                     
                     let hasContent = false;
-                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
                     if (['image', 'ptt', 'video', 'document'].includes(type)) {
                         hasContent = true;
                         console.log(`📥 Decodificando mídia (operador) tipo '${type}'...`);
@@ -155,7 +160,6 @@ async function start(client) {
                         if (buffer) {
                             console.log(`✅ Mídia (operador) decodificada com sucesso (${(buffer.length / 1024).toFixed(2)} KB).`);
                             payload.media_data = `data:${mimetype};base64,${buffer.toString('base64')}`;
-                            // Para documentos, o nome do arquivo vai no 'text'
                             payload.text = (type === 'document') ? filename : (msg.caption || '');
                             payload.msg_type = (type === 'ptt') ? 'audio' : type;
                         } else {
@@ -192,17 +196,30 @@ async function start(client) {
                     console.log(`📲 Enviando menu para cliente especial ${contato}.`);
                     await client.sendText(contato, 'Olá! Como posso ajudar?\n\n*Digite:*\n*1* para Abrir um Chamado\n*2* para Outros Assuntos');
                 } else if (currentState.stage === 'awaiting_menu_choice') {
+                    
                     if (texto === '1') {
                         currentState.key = `${getBaseKey(OPERADOR, contato)}#${Date.now()}`;
                         currentState.slots = [];
                         currentState.stage = 'awaiting_problem';
                         console.log(`🔴 Cliente ${contato} escolheu abrir chamado. Aguardando descrição.`);
                         await client.sendText(contato, 'Certo! Para abrir seu chamado, por favor, descreva o problema ou envie fotos, vídeos e áudios.');
+                    } else if (texto === '2') {
+                        console.log(`⏸️ Cliente ${contato} escolheu pausar o atendimento. Ativando pausa de ${PAUSE_DURATION / 1000}s.`);
+                        currentState.stage = 'paused';
+
+                        setTimeout(() => {
+                            if (conversationState[contato] && conversationState[contato].stage === 'paused') {
+                                console.log(`⏰ Fim do tempo de pausa para ${contato}. O bot está ativo novamente para ele.`);
+                                delete conversationState[contato];
+                            }
+                        }, PAUSE_DURATION);
+
+                        await client.sendText(contato, `Entendido. O atendimento automático ficará em pausa por 10 minutos. Após esse período, basta enviar uma nova mensagem para recomeçar, se necessário.`);
                     } else {
-                        console.log(`👋 Cliente ${contato} escolheu outra opção. Encerrando fluxo.`);
-                        delete conversationState[contato];
-                        await client.sendText(contato, 'Ok. Se precisar de algo, é só chamar.');
+                        console.log(`❓ Opção inválida digitada por ${contato}: "${texto}"`);
+                        await client.sendText(contato, 'Opção inválida. Por favor, digite:\n*1* para Abrir um Chamado\n*2* para Outros Assuntos');
                     }
+
                 } else if (currentState.stage === 'awaiting_problem' || currentState.stage === 'recording') {
                     const isFirstMessage = currentState.stage === 'awaiting_problem';
                     const contactInfo = await client.getContact(from);
@@ -216,7 +233,6 @@ async function start(client) {
                     };
                     
                     let hasContent = false;
-                    // *** ALTERAÇÃO AQUI: Adicionado 'document' à lista de tipos de mídia ***
                     if (['image', 'ptt', 'video', 'document'].includes(type)) {
                         hasContent = true;
                         console.log(`📥 Decodificando mídia (cliente) tipo '${type}'...`);

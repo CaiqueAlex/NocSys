@@ -6,8 +6,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>NocSys</title>
 <link rel="icon" type="image/png" href="{% static 'css/Nocsyslogo.png' %}">
+<link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
 <link rel="stylesheet" href="{% static 'css/main.css' %}" />
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
 </head>
 <body>
 
@@ -130,7 +132,7 @@
         <div id="edit-chamado-form-view">
             <h2>Editar Chamado #<span id="edit-chamado-codigo"></span></h2>
             <form id="edit-chamado-form" class="detalhes-suporte-container" style="margin-top: 1rem; padding: 0;">
-                <div class="detalhes-grid">
+                <div class="detalhes-grid edit-grid">
                     <span>Suporte:</span>
                     <div class="suporte-field-container">
                         <select name="suporte" id="suporte-select"></select>
@@ -141,6 +143,10 @@
                     <span>Resumo:</span> <input name="resumo" />
                     <span>Problema:</span> <textarea name="problema" rows="3"></textarea>
                     <span>Solução:</span> <textarea name="solucao" rows="3"></textarea>
+                    
+                    <span>Observações:</span>
+                    <button type="button" id="open-obs-editor-btn" class="btn-obs">Ver / Editar Observações</button>
+
                     <span>Indicador:</span>
                     <select name="indicador">
                         <option value="">Selecione...</option>
@@ -203,11 +209,10 @@
                     </div>
                 </div>
                 <div id="settings-view-graficos" class="settings-view hidden">
-                    <h2>Gráficos de Desempenho</h2>
-                    <div id="status-chart-container" class="chart-box">
-                        <canvas id="status-pie-chart"></canvas>
+                    <h2>Estatísticas de Desempenho</h2>
+                    <div id="charts-container">
+                        <!-- O conteúdo (tabela ou resumo) será renderizado aqui pelo JS -->
                     </div>
-                    <div id="status-chart-legend" class="chart-legend"></div>
                 </div>
             </div>
         </div>
@@ -234,12 +239,36 @@
     </div>
 </div>
 
-<!-- NOVO MODAL: FULLSCREEN DA CONVERSA -->
 <div id="fullscreen-convo-backdrop" class="modal-backdrop hidden">
     <div id="fullscreen-convo-box" class="modal-box">
         <button id="fullscreen-convo-close-btn" class="modal-close-btn">&times;</button>
-        <div id="fullscreen-convo-content">
-            <!-- O conteúdo da conversa será clonado aqui -->
+        <div id="fullscreen-convo-content"></div>
+    </div>
+</div>
+
+<!-- MODAL PARA GRÁFICOS EM TELA CHEIA -->
+<div id="charts-fullscreen-backdrop" class="modal-backdrop hidden">
+    <div id="charts-fullscreen-box" class="modal-box">
+        <button id="charts-fullscreen-close-btn" class="modal-close-btn">&times;</button>
+        <h2>Visualização de Gráficos</h2>
+        <div id="charts-fullscreen-content">
+            <!-- Gráficos serão renderizados aqui pelo JS -->
+        </div>
+    </div>
+</div>
+
+<div id="obs-modal-backdrop" class="modal-backdrop hidden">
+    <div id="obs-modal-box" class="modal-box">
+        <button id="obs-modal-close-btn" class="modal-close-btn">&times;</button>
+        <h2>Observações Internas do Chamado #<span id="obs-chamado-codigo"></span></h2>
+        <div id="obs-list-container"></div>
+        <div id="obs-attachment-preview-container"></div>
+        <div id="obs-input-bar">
+            <button id="obs-attach-btn" title="Anexar arquivo">📎</button>
+            <input type="file" id="obs-file-input" class="hidden">
+            <div id="obs-text-input" contenteditable="true" data-placeholder="Digite sua observação..."></div>
+            <button id="obs-mic-btn" title="Gravar áudio (em breve)" disabled>🎤</button>
+            <button id="obs-send-btn" title="Enviar">▶️</button>
         </div>
     </div>
 </div>
@@ -253,6 +282,7 @@
 
 <script>
   // --- FUNÇÕES GLOBAIS AUXILIARES ---
+  let currentUser = null;
 
   function escapeHtml(text) {
     if (typeof text !== 'string') return '';
@@ -309,7 +339,6 @@
     return csrfInput ? csrfInput.value : '';
   }
 
-  // NOVA FUNÇÃO: Mostrar modal de tela cheia
   function showConversationFullscreen(convoContainer) {
       const backdrop = document.getElementById('fullscreen-convo-backdrop');
       const contentBox = document.getElementById('fullscreen-convo-content');
@@ -317,7 +346,6 @@
 
       if (!backdrop || !contentBox || !closeBtn || !convoContainer) return;
       
-      // Limpa conteúdo anterior e clona o novo
       contentBox.innerHTML = '';
       const clonedContent = convoContainer.cloneNode(true);
       contentBox.appendChild(clonedContent);
@@ -326,9 +354,7 @@
       
       closeBtn.onclick = hide;
       backdrop.onclick = (e) => {
-          if (e.target === backdrop) {
-              hide();
-          }
+          if (e.target === backdrop) hide();
       };
 
       backdrop.classList.remove('hidden');
@@ -342,6 +368,7 @@
     const closeBtn = document.getElementById('edit-chamado-close-btn');
     const suporteSelect = document.getElementById('suporte-select');
     const assignBtn = document.getElementById('assign-to-me-btn');
+    const openObsBtn = document.getElementById('open-obs-editor-btn');
 
     formView.classList.remove('hidden', 'content-hiding');
     successView.classList.add('hidden');
@@ -373,9 +400,7 @@
         if (!res.ok) throw new Error('Falha ao carregar dados do chamado.');
         
         const chamados = await res.json();
-        const ultimoSlot = chamados
-            .filter(s => s.codigo_chamado === codigo)
-            .sort((a, b) => new Date(b.criado_em) - new Date(a.criado_em))[0];
+        const ultimoSlot = chamados.find(s => s.codigo_chamado === codigo);
 
         if (ultimoSlot) {
             form.elements.suporte.value = ultimoSlot.suporte || '';
@@ -386,6 +411,7 @@
             form.elements.solucao.value = ultimoSlot.solucao || '';
             form.elements.indicador.value = ultimoSlot.indicador || '';
             form.elements.tempo_solucao.value = ultimoSlot.tempo_solucao || (isFinalizado ? 'N/A' : 'Ainda em aberto');
+            openObsBtn.onclick = () => showObservacoesModal(codigo);
         }
         saveBtn.disabled = false;
         saveBtn.textContent = 'Salvar Alterações';
@@ -401,10 +427,12 @@
     
     const assignToMe = async () => {
         try {
-            const res = await fetch('/api/user/stats/');
-            if (!res.ok) throw new Error('Falha ao obter dados do usuário logado.');
-            const userData = await res.json();
-            suporteSelect.value = userData.username;
+            if (!currentUser || !currentUser.username) {
+                const res = await fetch('/api/user/stats/');
+                if (!res.ok) throw new Error('Falha ao obter dados do usuário logado.');
+                currentUser = await res.json();
+            }
+            suporteSelect.value = currentUser.username;
         } catch(error) { alert(error.message); }
     };
 
@@ -453,6 +481,76 @@
     form.addEventListener('submit', handleSave);
     closeBtn.addEventListener('click', handleClose);
     assignBtn.addEventListener('click', assignToMe);
+  }
+  
+  // --- NOVAS FUNÇÕES PARA O MODAL DE OBSERVAÇÕES ---
+  let currentObsCodigo = null;
+  let obsFileAttachment = null; // Guarda o arquivo a ser enviado
+
+  function renderObservacao(obs) {
+    const isSelf = obs.autor_username === currentUser.username;
+    const obsClass = isSelf ? 'suporte' : 'cliente';
+    
+    let content = '';
+    
+    if (obs.media_file) {
+        if (obs.msg_type === 'image') {
+            content += `<div class="media-container"><img src="${obs.media_file}" alt="Imagem" loading="lazy"></div>`;
+        } else {
+            // Tenta pegar o nome original do arquivo. Se não houver, usa o nome do path.
+            const fileName = obs.texto || obs.media_file.split('/').pop();
+            content += `<a href="${obs.media_file}" class="document-link" download>
+                           <span class="document-icon">📄</span>
+                           <span class="document-name">${escapeHtml(fileName)}</span>
+                       </a>`;
+        }
+    }
+    
+    // Renderiza o texto se houver, e se não for um documento (onde o texto já foi usado como nome)
+    if(obs.texto && obs.msg_type !== 'document') content += `<p>${escapeHtml(obs.texto)}</p>`;
+
+    return `
+        <div class="mensagem ${obsClass}">
+            <div class="mensagem-header">
+                <span>${escapeHtml(obs.autor_username)}</span>
+                <span>${niceDate(obs.criado_em)}</span>
+            </div>
+            ${content || '<p>[Mensagem vazia]</p>'}
+        </div>
+    `;
+  }
+
+  async function fetchAndRenderObservacoes(codigo) {
+    const obsListContainer = document.getElementById('obs-list-container');
+    obsListContainer.innerHTML = '<p>Carregando observações...</p>';
+    try {
+        const response = await fetch(`/api/chamado/${codigo}/observacoes/`);
+        if (!response.ok) throw new Error('Falha ao carregar observações.');
+        const observacoes = await response.json();
+        
+        if (observacoes.length === 0) {
+            obsListContainer.innerHTML = '<p class="text-center" style="color: var(--text-secondary);">Nenhuma observação interna registrada.</p>';
+        } else {
+            obsListContainer.innerHTML = observacoes.map(renderObservacao).join('');
+        }
+        obsListContainer.scrollTop = obsListContainer.scrollHeight;
+    } catch (err) {
+        obsListContainer.innerHTML = `<p style="color:var(--danger-color);">${err.message}</p>`;
+    }
+  }
+
+  async function showObservacoesModal(codigo) {
+    currentObsCodigo = codigo;
+    const backdrop = document.getElementById('obs-modal-backdrop');
+    document.getElementById('obs-chamado-codigo').textContent = codigo;
+    
+    if (!currentUser || !currentUser.username) {
+        const userRes = await fetch('/api/user/stats/');
+        if (userRes.ok) currentUser = await userRes.json();
+    }
+    
+    await fetchAndRenderObservacoes(codigo);
+    backdrop.classList.remove('hidden');
   }
 
   function typeWriter(element, text, speed) {
@@ -626,7 +724,6 @@
       
       loadDashboard();
 
-      // Event listener para o botão de tela cheia
       document.getElementById('content-area').addEventListener('click', function(e) {
           if (e.target.matches('.btn-fullscreen')) {
               e.stopPropagation();
@@ -744,6 +841,123 @@
     const settingsBtn = document.getElementById('settings-btn');
     if(settingsBtn) { 
         settingsBtn.addEventListener('click', showSettingsModal); 
+    }
+
+    const obsBackdrop = document.getElementById('obs-modal-backdrop');
+    if (obsBackdrop) {
+        const obsCloseBtn = document.getElementById('obs-modal-close-btn');
+        const obsSendBtn = document.getElementById('obs-send-btn');
+        const obsTextInput = document.getElementById('obs-text-input');
+        const obsAttachBtn = document.getElementById('obs-attach-btn');
+        const obsFileInput = document.getElementById('obs-file-input');
+        const obsPreviewContainer = document.getElementById('obs-attachment-preview-container');
+
+        const clearAttachment = () => {
+            obsFileAttachment = null;
+            obsFileInput.value = ''; 
+            obsPreviewContainer.innerHTML = '';
+        };
+
+        const showAttachmentPreview = (file) => {
+            obsFileAttachment = file;
+            let previewHtml = '';
+            if (file.type.startsWith('image/')) {
+                previewHtml = `
+                    <div class="obs-attachment-preview">
+                        <img src="${URL.createObjectURL(file)}" class="obs-preview-thumbnail" alt="Preview">
+                        <span class="obs-preview-name">${escapeHtml(file.name)}</span>
+                        <button class="obs-remove-attachment" title="Remover anexo">&times;</button>
+                    </div>`;
+            } else {
+                previewHtml = `
+                    <div class="obs-attachment-preview">
+                        <span class="document-icon">📄</span>
+                        <span class="obs-preview-name">${escapeHtml(file.name)}</span>
+                        <button class="obs-remove-attachment" title="Remover anexo">&times;</button>
+                    </div>`;
+            }
+            obsPreviewContainer.innerHTML = previewHtml;
+            obsPreviewContainer.querySelector('.obs-remove-attachment').onclick = clearAttachment;
+        };
+        
+        const hide = () => {
+            clearAttachment();
+            obsBackdrop.classList.add('hidden');
+        };
+
+        obsCloseBtn.onclick = hide;
+        obsBackdrop.onclick = e => { if (e.target === obsBackdrop) hide(); };
+        obsAttachBtn.onclick = () => obsFileInput.click();
+        obsFileInput.onchange = () => {
+            if (obsFileInput.files.length > 0) {
+                showAttachmentPreview(obsFileInput.files[0]);
+            }
+        };
+        
+        obsTextInput.onpaste = (event) => {
+            const items = (event.clipboardData || window.clipboardData).items;
+            for (const item of items) {
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    event.preventDefault();
+                    const file = item.getAsFile();
+                    showAttachmentPreview(file);
+                    return;
+                }
+            }
+        };
+
+        obsSendBtn.onclick = async () => {
+            const texto = obsTextInput.innerText.trim();
+            const file = obsFileAttachment;
+
+            if (!texto && !file) return;
+
+            obsSendBtn.disabled = true;
+            obsSendBtn.textContent = '...';
+            const formData = new FormData();
+            if (file && !file.type.startsWith('image/')) {
+                 formData.append('texto', file.name);
+            } else if (texto) {
+                 formData.append('texto', texto);
+            }
+
+            if (file) formData.append('media_file', file);
+            
+            try {
+                const response = await fetch(`/api/chamado/${currentObsCodigo}/observacoes/`, {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCsrfToken() },
+                    body: formData,
+                });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(JSON.stringify(errorData));
+                }
+                const newObs = await response.json();
+                const obsListContainer = document.getElementById('obs-list-container');
+                const noObsMessage = obsListContainer.querySelector('.text-center');
+                if (noObsMessage) noObsMessage.remove();
+                
+                obsListContainer.insertAdjacentHTML('beforeend', renderObservacao(newObs));
+                obsListContainer.scrollTop = obsListContainer.scrollHeight;
+
+                obsTextInput.innerHTML = '';
+                clearAttachment();
+
+            } catch (err) {
+                alert('Erro ao enviar observação: ' + err.message);
+            } finally {
+                obsSendBtn.disabled = false;
+                obsSendBtn.innerHTML = '▶️';
+            }
+        };
+
+        obsTextInput.onkeydown = (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                obsSendBtn.click();
+            }
+        };
     }
   });
 </script>

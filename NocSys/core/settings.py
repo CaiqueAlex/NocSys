@@ -8,7 +8,7 @@ SECRET_KEY = 'django-insecure-my(7q+8p0pj5&uh-+6(glv%=*@8*s-u94k5x=_hwkf3ud=%d($
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    '*',  # Permite acesso de qualquer host (não recomendado em produção)
+    '*',
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -39,6 +39,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # --- MIDDLEWARE ATUALIZADO ---
+    'Noc.middleware.AdminGateMiddleware',
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -97,3 +99,13 @@ REST_FRAMEWORK = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+# --- CONFIGURAÇÕES PARA O ACESSO RESTRITO AO ADMIN ---
+
+# Faz a sessão expirar quando o navegador do usuário é fechado.
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+
+# Credenciais para o acesso restrito ao Admin
+ADMIN_ACCESS_USER = 'admingeral'
+ADMIN_ACCESS_PASSWORD = 'admin123'

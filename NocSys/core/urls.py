@@ -5,7 +5,12 @@ from django.conf.urls.static import static
 
 # Primeiro, defina a lista principal de URLs
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    # ALTERAÇÃO: A URL do admin foi trocada de 'admin/' para algo secreto.
+    # Troque 'sua-url-secreta-aqui/' por um nome que só você saiba.
+    # Exemplo: 'gestao-do-sistema-4a7b2c/'
+    path('webadmin/', admin.site.urls),
+
+    # O resto das suas URLs permanece igual.
     path('', include('Noc.urls')),
 ]
 

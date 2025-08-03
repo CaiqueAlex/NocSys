@@ -2,8 +2,9 @@ from django.urls import path, include
 from . import views
 from django.views.generic.base import RedirectView
 from rest_framework.routers import DefaultRouter
+from django.conf import settings
+from django.conf.urls.static import static
 
-# --- ROUTER PARA CLIENTES ---
 router = DefaultRouter()
 router.register(r'clientes', views.ClienteViewSet, basename='cliente')
 
@@ -18,14 +19,14 @@ urlpatterns = [
     path('api/chamado/apagar/<str:codigo>/', views.apagar_chamado_por_codigo, name='apagar_chamado_por_codigo'),
     path('api/chamado/atualizar/<str:codigo>/', views.atualizar_chamado, name='atualizar_chamado'),
     path('api/chamado/finalizar/<str:codigo>/', views.finalizar_chamado, name='finalizar_chamado'),
-    # --- NOVA API DE GRÁFICOS ---
+    path('api/chamado/<str:codigo>/observacoes/', views.ObservacaoAPIView.as_view(), name='observacao-api'),
     path('api/graficos/status_chamados/', views.get_grafico_status_chamados, name='get_grafico_status_chamados'),
     
-    # URL principal da aplicação
     path('NocSys/', views.main_view, name='main'),
-    
-    # URL de Logout
     path('logout/', views.logout_view, name='logout'),
+
+    # --- NOVA URL PARA O PORTÃO DE LOGIN DO ADMIN ---
+    path('acesso-restrito/login/', views.admin_login_gate_view, name='admin_login_gate'),
 
     # APIs para o bot
     path('api/whatsapp-note/', views.WhatsappSlotCreateOrUpdateAPIView.as_view(), name='api-whatsapp-note'),
@@ -38,6 +39,9 @@ urlpatterns = [
     path('api/whatsapp-slots/', views.WhatsappSlotListAPIView.as_view(), name='api-whatsapp-slot-list'),
     path('api/whatsapp-slots/<int:pk>/', views.WhatsappSlotUpdateAPIView.as_view(), name='api-whatsapp-slot-edit'),
 
-    # --- ROTAS DO CLIENTEVIEWSET ---
     path('api/', include(router.urls)),
 ]
+
+# Adicionar para servir arquivos de mídia em desenvolvimento
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
